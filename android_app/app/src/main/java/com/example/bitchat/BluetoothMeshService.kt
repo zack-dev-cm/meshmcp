@@ -336,9 +336,9 @@ class BluetoothMeshService {
         // Prepare BLE packet with our current peer ID in the header
         val packet =
             BitchatPacket(
-                MessageType.MESSAGE,
-                myPeerId,
-                message.toByteArray(),
+                type = MessageType.MESSAGE,
+                senderId = myPeerId,
+                payload = message.toByteArray(),
             )
         val packetBytes = packet.toBytes() // TODO send packet over BLE
 
