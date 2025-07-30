@@ -20,3 +20,11 @@ cd android_app
 ```
 
 Target SDK 33, minSdk 26+. Required permissions are declared in the manifest for Bluetooth and location.
+
+## Testing & Linting
+
+Run unit tests and Kotlin formatting checks:
+
+```
+./gradlew test ktlintCheck
+```
