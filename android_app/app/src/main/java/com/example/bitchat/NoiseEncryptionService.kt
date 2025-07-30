@@ -39,7 +39,6 @@ class NoiseEncryptionService(context: Context) {
         if (saved != null) {
             val priv = Base64.decode(saved, Base64.NO_WRAP)
             dh.setPrivateKey(priv, 0)
-            dh.generatePublicKey()
         } else {
             dh.generateKeyPair()
             val priv = ByteArray(dh.privateKeyLength)
