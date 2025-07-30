@@ -31,6 +31,19 @@ class BluetoothMeshService {
         appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private var gattServer: BluetoothGattServer? = null
     private val connections = mutableMapOf<BluetoothDevice, BluetoothGatt?>()
+    private val outgoingQueues = mutableMapOf<String, MutableList<Pair<MessageEntity, ByteArray>>>()
+
+    private val localPeerId: ByteArray by lazy {
+        val addr = bluetoothAdapter?.address ?: UUID.randomUUID().toString()
+        val parts = addr.split(":")
+        val id = ByteArray(8)
+        for (i in parts.indices) {
+            if (i >= 8) break
+            val p = parts[i]
+            id[i] = p.toInt(16).toByte()
+        }
+        id
+    }
 
     fun start() {
         startGattServer()
@@ -53,8 +66,16 @@ class BluetoothMeshService {
             repository.savePeer(PeerEntity(peerId, nickname, System.currentTimeMillis()))
             val queued = repository.undeliveredForPeer(peerId)
             queued.forEach { msg ->
-                // TODO send via BLE
-                repository.markDelivered(msg)
+                val bytes = createPacket(peerId, msg.content)
+                writeOrQueue(peerId, msg, bytes)
+            }
+            outgoingQueues[peerId]?.let { list ->
+                val iterator = list.iterator()
+                while (iterator.hasNext()) {
+                    val (ent, data) = iterator.next()
+                    writeOrQueue(peerId, ent, data)
+                    iterator.remove()
+                }
             }
         }
     }
@@ -132,6 +153,27 @@ class BluetoothMeshService {
                 }
             }
         }
+
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val peerId = gatt.device.address
+                val queue = outgoingQueues[peerId]
+                val item = queue?.firstOrNull()
+                if (item != null) {
+                    queue.removeAt(0)
+                    scope.launch { repository.markDelivered(item.first) }
+                    if (queue.isNotEmpty()) {
+                        val next = queue.first()
+                        characteristic.value = next.second
+                        gatt.writeCharacteristic(characteristic)
+                    }
+                }
+            }
+        }
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -165,6 +207,53 @@ class BluetoothMeshService {
         }
     }
 
+    private fun macToBytes(mac: String): ByteArray {
+        val parts = mac.split(":")
+        val bytes = ByteArray(8)
+        for (i in parts.indices) {
+            if (i >= 8) break
+            bytes[i] = parts[i].toInt(16).toByte()
+        }
+        return bytes
+    }
+
+    private fun createPacket(peerId: String, text: String): ByteArray {
+        val packet = BitchatPacket(
+            type = MessageType.MESSAGE,
+            senderId = localPeerId,
+            recipientId = macToBytes(peerId),
+            payload = text.toByteArray()
+        )
+        return packet.toBytes()
+    }
+
+    private fun writeOrQueue(peerId: String, entity: MessageEntity, bytes: ByteArray) {
+        var wrote = false
+        val serverCharacteristic = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+        connections.forEach { (device, gatt) ->
+            if (device.address == peerId) {
+                if (gatt != null) {
+                    val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                    if (char != null) {
+                        char.value = bytes
+                        if (gatt.writeCharacteristic(char)) {
+                            outgoingQueues.getOrPut(peerId) { mutableListOf() }.add(entity to bytes)
+                            wrote = true
+                        }
+                    }
+                } else if (serverCharacteristic != null) {
+                    serverCharacteristic.value = bytes
+                    gattServer?.notifyCharacteristicChanged(device, serverCharacteristic, false)
+                    scope.launch { repository.markDelivered(entity) }
+                    wrote = true
+                }
+            }
+        }
+        if (!wrote) {
+            outgoingQueues.getOrPut(peerId) { mutableListOf() }.add(entity to bytes)
+        }
+    }
+
     fun sendMessage(peerId: String, message: String) {
         val entity = MessageEntity(
             id = UUID.randomUUID().toString(),
@@ -184,24 +273,11 @@ class BluetoothMeshService {
 
         scope.launch {
             repository.saveMessage(entity)
+            val bytes = createPacket(peerId, message)
             if (peers.contains(peerId)) {
-                val bytes = message.toByteArray()
-                val serverCharacteristic = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
-                connections.forEach { (device, gatt) ->
-                    if (device.address == peerId) {
-                        if (gatt != null) {
-                            val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
-                            if (char != null) {
-                                char.value = bytes
-                                gatt.writeCharacteristic(char)
-                            }
-                        } else if (serverCharacteristic != null) {
-                            serverCharacteristic.value = bytes
-                            gattServer?.notifyCharacteristicChanged(device, serverCharacteristic, false)
-                        }
-                    }
-                }
-                repository.markDelivered(entity)
+                writeOrQueue(peerId, entity, bytes)
+            } else {
+                outgoingQueues.getOrPut(peerId) { mutableListOf() }.add(entity to bytes)
             }
         }
     }
