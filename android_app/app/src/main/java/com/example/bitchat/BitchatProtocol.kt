@@ -78,7 +78,7 @@ data class BitchatPacket(
         fun from(data: ByteArray): BitchatPacket? {
             if (data.size < 21) return null // minimum header + senderId
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN)
-            val version = buffer.get()
+            val version = buffer.get().toInt()
             val typeByte = buffer.get()
             val type = MessageType.fromId(typeByte) ?: return null
             val ttl = buffer.get()
