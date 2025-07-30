@@ -124,6 +124,11 @@ class NoiseEncryptionService(context: Context) {
         return sessions[peerId]?.status ?: EncryptionStatus.NO_HANDSHAKE
     }
 
+    fun wipeAll() {
+        prefs.edit().clear().apply()
+        sessions.clear()
+    }
+
     private fun createHandshake(role: Int): HandshakeState {
         val hs = HandshakeState("Noise_XX_25519_ChaChaPoly_SHA256", role)
         val local = Noise.createDH("25519")

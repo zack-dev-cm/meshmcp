@@ -53,9 +53,21 @@ fun ChatScreen(service: BluetoothMeshService) {
 fun handleInput(input: String, service: BluetoothMeshService, messages: MutableList<String>) {
     when {
         input.startsWith("/msg ") -> {
-            val content = input.removePrefix("/msg ")
-            service.sendMessage(content)
-            messages.add("Me: $content")
+            val rest = input.removePrefix("/msg ")
+            val parts = rest.split(" ", limit = 2)
+            if (parts.size == 2) {
+                val peer = parts[0]
+                val content = parts[1]
+                service.sendMessage(peer, content)
+                messages.add("Me -> $peer: $content")
+            } else {
+                messages.add("Usage: /msg <peerId> <message>")
+            }
+        }
+        input.startsWith("/wipe") -> {
+            service.wipeAllData()
+            messages.clear()
+            messages.add("Data wiped")
         }
         input.startsWith("/who") -> {
             val peers = service.connectedPeers().joinToString(", ")

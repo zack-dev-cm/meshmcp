@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     kotlin("android")
+    kotlin("kapt")
 }
 
 android {
@@ -51,4 +52,8 @@ dependencies {
 
     implementation("org.signal.forks:noise-java:0.1.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1")
 }
