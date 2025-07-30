@@ -27,14 +27,19 @@ import androidx.compose.ui.unit.dp
 import com.example.bitchat.db.MessageEntity
 
 class MainActivity : ComponentActivity() {
-    private val permissions =
-        arrayOf(
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_ADVERTISE,
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE,
-        )
+    private val permissions: Array<String>
+        get() {
+            val list = mutableListOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            )
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                list += Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE
+            }
+            return list.toTypedArray()
+        }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -87,7 +92,7 @@ class MainActivity : ComponentActivity() {
                     android.content.pm.PackageManager.PERMISSION_GRANTED
             }
         if (missing.isNotEmpty()) {
-            permissionLauncher.launch(permissions)
+            permissionLauncher.launch(missing.toTypedArray())
         } else {
             startMeshService()
         }
