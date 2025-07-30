@@ -31,6 +31,10 @@ class BluetoothMeshService {
     private val peers = mutableSetOf<String>()
     private val _peersFlow = MutableStateFlow<List<String>>(emptyList())
     val peersFlow: StateFlow<List<String>> = _peersFlow
+
+    private val discovered = mutableSetOf<String>()
+    private val _discoveredFlow = MutableStateFlow<List<String>>(emptyList())
+    val discoveredPeersFlow: StateFlow<List<String>> = _discoveredFlow
     val messages: Flow<List<MessageEntity>> = repository.messages()
     private val identity = PeerIdentityManager
 
@@ -57,6 +61,10 @@ class BluetoothMeshService {
     }
 
     fun start() {
+        peers.clear()
+        discovered.clear()
+        _peersFlow.value = emptyList()
+        _discoveredFlow.value = emptyList()
         startGattServer()
         startScanning()
         startAdvertising()
@@ -69,6 +77,10 @@ class BluetoothMeshService {
         gattServer = null
         connections.values.forEach { it?.close() }
         connections.clear()
+        peers.clear()
+        discovered.clear()
+        _peersFlow.value = emptyList()
+        _discoveredFlow.value = emptyList()
     }
 
     /**
@@ -246,6 +258,9 @@ class BluetoothMeshService {
                 result: ScanResult?,
             ) {
                 val device = result?.device ?: return
+                if (discovered.add(device.address)) {
+                    _discoveredFlow.value = discovered.toList()
+                }
                 if (!connections.containsKey(device)) {
                     val gatt = device.connectGatt(appContext, false, gattClientCallback)
                     connections[device] = gatt
@@ -400,6 +415,14 @@ class BluetoothMeshService {
                 val bytes = createPacket(peer, message)
                 writeOrQueue(peer, entity, bytes)
             }
+        }
+    }
+
+    fun connectToPeer(address: String) {
+        val device = bluetoothAdapter?.getRemoteDevice(address) ?: return
+        if (!connections.containsKey(device)) {
+            val gatt = device.connectGatt(appContext, false, gattClientCallback)
+            connections[device] = gatt
         }
     }
 
