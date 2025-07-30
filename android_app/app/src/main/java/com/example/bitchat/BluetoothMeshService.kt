@@ -1,8 +1,7 @@
 package com.example.bitchat
 
 import android.bluetooth.le.*
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
+import android.bluetooth.*
 import android.content.Context
 import android.os.ParcelUuid
 import java.util.*
@@ -28,7 +27,13 @@ class BluetoothMeshService {
     private val scope = CoroutineScope(Dispatchers.IO)
     private val peers = mutableSetOf<String>()
 
+    private val bluetoothManager: BluetoothManager? =
+        appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+    private var gattServer: BluetoothGattServer? = null
+    private val connections = mutableMapOf<BluetoothDevice, BluetoothGatt?>()
+
     fun start() {
+        startGattServer()
         startScanning()
         startAdvertising()
     }
@@ -36,6 +41,10 @@ class BluetoothMeshService {
     fun stop() {
         scanner?.stopScan(scanCallback)
         advertiser?.stopAdvertising(advertiseCallback)
+        gattServer?.close()
+        gattServer = null
+        connections.values.forEach { it?.close() }
+        connections.clear()
     }
 
     fun onPeerConnected(peerId: String, nickname: String? = null) {
@@ -62,9 +71,76 @@ class BluetoothMeshService {
         scanner?.startScan(listOf(filter), settings, scanCallback)
     }
 
+    private fun startGattServer() {
+        gattServer = bluetoothManager?.openGattServer(appContext, gattServerCallback)
+        val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        val characteristic = BluetoothGattCharacteristic(
+            characteristicUuid,
+            BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+            BluetoothGattCharacteristic.PERMISSION_WRITE
+        )
+        service.addCharacteristic(characteristic)
+        gattServer?.addService(service)
+    }
+
+    private val gattServerCallback = object : BluetoothGattServerCallback() {
+        override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                connections[device] = null
+                onPeerConnected(device.address)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                connections.remove(device)
+                onPeerDisconnected(device.address)
+            }
+        }
+
+        override fun onCharacteristicWriteRequest(
+            device: BluetoothDevice,
+            requestId: Int,
+            characteristic: BluetoothGattCharacteristic,
+            preparedWrite: Boolean,
+            responseNeeded: Boolean,
+            offset: Int,
+            value: ByteArray
+        ) {
+            if (responseNeeded) {
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+            }
+        }
+    }
+
+    private val gattClientCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                connections[gatt.device] = gatt
+                onPeerConnected(gatt.device.address)
+                gatt.discoverServices()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                connections.remove(gatt.device)
+                onPeerDisconnected(gatt.device.address)
+                gatt.close()
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            val characteristic = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+            if (characteristic != null) {
+                gatt.setCharacteristicNotification(characteristic, true)
+                characteristic.descriptors.forEach { desc ->
+                    desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    gatt.writeDescriptor(desc)
+                }
+            }
+        }
+    }
+
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
-            // handle incoming packets
+            val device = result?.device ?: return
+            if (!connections.containsKey(device)) {
+                val gatt = device.connectGatt(appContext, false, gattClientCallback)
+                connections[device] = gatt
+            }
         }
     }
 
@@ -109,7 +185,22 @@ class BluetoothMeshService {
         scope.launch {
             repository.saveMessage(entity)
             if (peers.contains(peerId)) {
-                // TODO send via BLE
+                val bytes = message.toByteArray()
+                val serverCharacteristic = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                connections.forEach { (device, gatt) ->
+                    if (device.address == peerId) {
+                        if (gatt != null) {
+                            val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                            if (char != null) {
+                                char.value = bytes
+                                gatt.writeCharacteristic(char)
+                            }
+                        } else if (serverCharacteristic != null) {
+                            serverCharacteristic.value = bytes
+                            gattServer?.notifyCharacteristicChanged(device, serverCharacteristic, false)
+                        }
+                    }
+                }
                 repository.markDelivered(entity)
             }
         }
