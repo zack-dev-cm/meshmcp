@@ -33,6 +33,11 @@ class BluetoothMeshService {
         startAdvertising()
     }
 
+    fun stop() {
+        scanner?.stopScan(scanCallback)
+        advertiser?.stopAdvertising(advertiseCallback)
+    }
+
     fun onPeerConnected(peerId: String, nickname: String? = null) {
         peers.add(peerId)
         scope.launch {
