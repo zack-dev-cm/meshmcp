@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import com.example.bitchat.db.MessageEntity
 
 class MainActivity : ComponentActivity() {
     private val permissions =
@@ -159,8 +160,11 @@ fun MessageItem(msg: MessageEntity) {
                 text = java.util.Date(msg.timestamp).toString(),
                 style = MaterialTheme.typography.bodySmall
             )
-            msg.deliveryStatus?.let {
-                Text(text = it, style = MaterialTheme.typography.bodySmall)
+            if (msg.deliveryStatus != null) {
+                Text(
+                    text = msg.deliveryStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
