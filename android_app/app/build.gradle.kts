@@ -45,6 +45,7 @@ dependencies {
     implementation("androidx.compose.ui:ui:1.5.3")
     implementation("androidx.compose.ui:ui-tooling-preview:1.5.3")
     implementation("androidx.compose.material3:material3:1.1.1")
+    implementation("com.google.android.material:material:1.11.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.mockk:mockk:1.13.8")
     testImplementation("androidx.test:core:1.5.0")
