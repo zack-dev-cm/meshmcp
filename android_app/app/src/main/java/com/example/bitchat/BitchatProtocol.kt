@@ -44,7 +44,7 @@ data class BitchatPacket(
         val payloadLength = payload.size.toShort()
         val capacity = 13 + 8 + (if (recipientId != null) 8 else 0) + payload.size + (signature?.size ?: 0)
         val buffer = ByteBuffer.allocate(capacity).order(ByteOrder.BIG_ENDIAN)
-        buffer.put(version)
+        buffer.put(version.toByte())
         buffer.put(type.id)
         buffer.put(ttl)
         buffer.putLong(timestamp)
