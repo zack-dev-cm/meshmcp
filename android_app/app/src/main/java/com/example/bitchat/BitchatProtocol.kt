@@ -30,7 +30,7 @@ enum class MessageType(val id: Byte) {
 }
 
 data class BitchatPacket(
-    val version: Byte = 1,
+    val version: Int = 1,
     val type: MessageType,
     var ttl: Byte = 3,
     val timestamp: Long = System.currentTimeMillis(),

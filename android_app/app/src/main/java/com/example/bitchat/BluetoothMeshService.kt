@@ -4,10 +4,6 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.os.ParcelUuid
-import com.example.bitchat.BitchatPacket
-import com.example.bitchat.MessageType
-import com.example.bitchat.NoiseEncryptionService
-import com.example.bitchat.PeerIdentityManager
 import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
