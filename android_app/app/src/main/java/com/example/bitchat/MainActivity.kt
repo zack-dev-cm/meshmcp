@@ -117,9 +117,25 @@ fun ChatScreen(service: BluetoothMeshService) {
     var text by remember { mutableStateOf(TextFieldValue("")) }
     val messages by service.messages.collectAsState(initial = emptyList())
     val peers by service.peersFlow.collectAsState(initial = emptyList())
+    val discovered by service.discoveredPeersFlow.collectAsState(initial = emptyList())
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Peers: " + peers.joinToString(", "))
+        if (discovered.isNotEmpty()) {
+            Text("Available peers:")
+            LazyColumn(modifier = Modifier.height(100.dp)) {
+                items(discovered) { addr ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { service.connectToPeer(addr) }
+                            .padding(4.dp)
+                    ) {
+                        Text(addr)
+                    }
+                }
+            }
+        }
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(messages) { msg ->
                 MessageItem(msg)
