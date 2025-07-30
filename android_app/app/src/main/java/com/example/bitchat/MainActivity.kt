@@ -10,6 +10,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -93,13 +95,22 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun ChatScreen(service: BluetoothMeshService) {
     var text by remember { mutableStateOf(TextFieldValue("")) }
-    val messages = remember { mutableStateListOf<String>() }
+    val messages by service.messages().collectAsState(initial = emptyList())
+    val peers by service.peerFlow.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        messages.forEach { msg ->
-            Text(text = msg)
+        Text("Peers: " + peers.joinToString(", "))
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(messages) { msg ->
+                val time = remember(msg.timestamp) {
+                    java.text.SimpleDateFormat(
+                        "HH:mm:ss",
+                        java.util.Locale.getDefault()
+                    ).format(java.util.Date(msg.timestamp))
+                }
+                Text("${msg.sender} [$time]: ${msg.content}")
+            }
         }
-        Spacer(Modifier.weight(1f))
         Row {
             TextField(
                 value = text,
@@ -109,7 +120,7 @@ fun ChatScreen(service: BluetoothMeshService) {
             Button(onClick = {
                 val input = text.text
                 text = TextFieldValue("")
-                handleInput(input, service, messages)
+                handleInput(input, service)
             }) {
                 Text("Send")
             }
@@ -117,7 +128,7 @@ fun ChatScreen(service: BluetoothMeshService) {
     }
 }
 
-fun handleInput(input: String, service: BluetoothMeshService, messages: MutableList<String>) {
+fun handleInput(input: String, service: BluetoothMeshService) {
     when {
         input.startsWith("/msg ") -> {
             val rest = input.removePrefix("/msg ")
@@ -125,21 +136,19 @@ fun handleInput(input: String, service: BluetoothMeshService, messages: MutableL
             if (parts.size == 2) {
                 val peer = parts[0]
                 val content = parts[1]
-                service.sendMessage(peer, content)
-                messages.add("Me -> $peer: $content")
+                service.sendPrivateMessage(peer, content)
             } else {
-                messages.add("Usage: /msg <peerId> <message>")
+                service.sendPublicMessage("Usage: /msg <peerId> <message>")
             }
         }
         input.startsWith("/wipe") -> {
             service.wipeAllData()
-            messages.clear()
-            messages.add("Data wiped")
+            service.sendPublicMessage("Data wiped")
         }
         input.startsWith("/who") -> {
             val peers = service.connectedPeers().joinToString(", ")
-            messages.add("Peers: $peers")
+            service.sendPublicMessage("Peers: $peers")
         }
-        else -> messages.add("Unknown command")
+        else -> service.sendPublicMessage(input)
     }
 }

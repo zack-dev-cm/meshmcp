@@ -12,6 +12,10 @@ import com.example.bitchat.db.PeerEntity
 import com.example.bitchat.NoiseEncryptionService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class BluetoothMeshService {
@@ -27,6 +31,8 @@ class BluetoothMeshService {
     private val repository = ChatRepository(appContext)
     private val scope = CoroutineScope(Dispatchers.IO)
     private val peers = mutableSetOf<String>()
+    private val _peerFlow = MutableStateFlow<Set<String>>(emptySet())
+    val peerFlow: StateFlow<Set<String>> = _peerFlow.asStateFlow()
 
     fun start() {
         startScanning()
@@ -40,6 +46,7 @@ class BluetoothMeshService {
 
     fun onPeerConnected(peerId: String, nickname: String? = null) {
         peers.add(peerId)
+        _peerFlow.value = peers.toSet()
         scope.launch {
             repository.savePeer(PeerEntity(peerId, nickname, System.currentTimeMillis()))
             val queued = repository.undeliveredForPeer(peerId)
@@ -52,6 +59,7 @@ class BluetoothMeshService {
 
     fun onPeerDisconnected(peerId: String) {
         peers.remove(peerId)
+        _peerFlow.value = peers.toSet()
     }
 
     private fun startScanning() {
@@ -89,7 +97,29 @@ class BluetoothMeshService {
         }
     }
 
-    fun sendMessage(peerId: String, message: String) {
+    fun messages(): Flow<List<MessageEntity>> = repository.messages()
+
+    fun sendPublicMessage(message: String) {
+        val entity = MessageEntity(
+            id = UUID.randomUUID().toString(),
+            sender = "me",
+            content = message,
+            timestamp = System.currentTimeMillis(),
+            isRelay = false,
+            originalSender = null,
+            isPrivate = false,
+            recipientNickname = null,
+            senderPeerId = null,
+            deliveryStatus = "sent",
+            retryCount = 0,
+            isFavorite = false,
+            delivered = true
+        )
+
+        scope.launch { repository.saveMessage(entity) }
+    }
+
+    fun sendPrivateMessage(peerId: String, message: String) {
         val entity = MessageEntity(
             id = UUID.randomUUID().toString(),
             sender = "me",
@@ -115,9 +145,7 @@ class BluetoothMeshService {
         }
     }
 
-    fun connectedPeers(): List<String> {
-        return peers.toList()
-    }
+    fun connectedPeers(): List<String> = peerFlow.value.toList()
 
     fun wipeAllData() {
         scope.launch { repository.wipeAll() }
