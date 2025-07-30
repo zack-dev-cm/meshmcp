@@ -1,0 +1,23 @@
+# General
+.DS_Store
+.idea/
+*.iml
+
+# Gradle
+.gradle/
+*/build/
+local.properties
+
+# Android
+android_app/app/build/
+android_app/build/
+
+# Xcode
+DerivedData/
+*.xcworkspace
+bitchat.xcodeproj/project.xcworkspace/
+bitchat.xcodeproj/xcuserdata/
+
+# Swift Package Manager
+/.swiftpm/
+.build/
