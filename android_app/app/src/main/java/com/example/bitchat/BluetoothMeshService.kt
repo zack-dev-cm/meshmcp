@@ -1,20 +1,23 @@
 package com.example.bitchat
 
-import android.bluetooth.le.*
 import android.bluetooth.*
+import android.bluetooth.le.*
 import android.content.Context
 import android.os.ParcelUuid
-import java.util.*
+import com.example.bitchat.BitchatPacket
+import com.example.bitchat.MessageType
+import com.example.bitchat.NoiseEncryptionService
+import com.example.bitchat.PeerIdentityManager
 import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
-import com.example.bitchat.NoiseEncryptionService
-import com.example.bitchat.PeerIdentityManager
-import com.example.bitchat.BitchatPacket
-import com.example.bitchat.MessageType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.util.*
 
 class BluetoothMeshService {
     private val serviceUuid = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
@@ -29,6 +32,9 @@ class BluetoothMeshService {
     private val repository = ChatRepository(appContext)
     private val scope = CoroutineScope(Dispatchers.IO)
     private val peers = mutableSetOf<String>()
+    private val _peersFlow = MutableStateFlow<List<String>>(emptyList())
+    val peersFlow: StateFlow<List<String>> = _peersFlow
+    val messages: Flow<List<MessageEntity>> = repository.messages()
     private val identity = PeerIdentityManager
 
     /** Current ephemeral peer ID used by this service. */
@@ -77,8 +83,12 @@ class BluetoothMeshService {
         identity.rotate()
     }
 
-    fun onPeerConnected(peerId: String, nickname: String? = null) {
+    fun onPeerConnected(
+        peerId: String,
+        nickname: String? = null,
+    ) {
         peers.add(peerId)
+        _peersFlow.value = peers.toList()
         scope.launch {
             repository.savePeer(PeerEntity(peerId, nickname, System.currentTimeMillis()))
             val queued = repository.undeliveredForPeer(peerId)
@@ -99,12 +109,15 @@ class BluetoothMeshService {
 
     fun onPeerDisconnected(peerId: String) {
         peers.remove(peerId)
+        _peersFlow.value = peers.toList()
     }
 
     private fun startScanning() {
-        val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(serviceUuid))
-            .build()
+        val filter =
+            ScanFilter
+                .Builder()
+                .setServiceUuid(ParcelUuid(serviceUuid))
+                .build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         scanner?.startScan(listOf(filter), settings, scanCallback)
     }
@@ -112,118 +125,141 @@ class BluetoothMeshService {
     private fun startGattServer() {
         gattServer = bluetoothManager?.openGattServer(appContext, gattServerCallback)
         val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
-        val characteristic = BluetoothGattCharacteristic(
-            characteristicUuid,
-            BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-            BluetoothGattCharacteristic.PERMISSION_WRITE
-        )
+        val characteristic =
+            BluetoothGattCharacteristic(
+                characteristicUuid,
+                BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+                BluetoothGattCharacteristic.PERMISSION_WRITE,
+            )
         service.addCharacteristic(characteristic)
         gattServer?.addService(service)
     }
 
-    private val gattServerCallback = object : BluetoothGattServerCallback() {
-        override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                connections[device] = null
-                onPeerConnected(device.address)
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                connections.remove(device)
-                onPeerDisconnected(device.address)
+    private val gattServerCallback =
+        object : BluetoothGattServerCallback() {
+            override fun onConnectionStateChange(
+                device: BluetoothDevice,
+                status: Int,
+                newState: Int,
+            ) {
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    connections[device] = null
+                    onPeerConnected(device.address)
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    connections.remove(device)
+                    onPeerDisconnected(device.address)
+                }
             }
-        }
 
-        override fun onCharacteristicWriteRequest(
-            device: BluetoothDevice,
-            requestId: Int,
-            characteristic: BluetoothGattCharacteristic,
-            preparedWrite: Boolean,
-            responseNeeded: Boolean,
-            offset: Int,
-            value: ByteArray
-        ) {
-            if (responseNeeded) {
-                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
-            }
-        }
-    }
-
-    private val gattClientCallback = object : BluetoothGattCallback() {
-        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                connections[gatt.device] = gatt
-                onPeerConnected(gatt.device.address)
-                gatt.discoverServices()
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                connections.remove(gatt.device)
-                onPeerDisconnected(gatt.device.address)
-                gatt.close()
-            }
-        }
-
-        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            val characteristic = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
-            if (characteristic != null) {
-                gatt.setCharacteristicNotification(characteristic, true)
-                characteristic.descriptors.forEach { desc ->
-                    desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(desc)
+            override fun onCharacteristicWriteRequest(
+                device: BluetoothDevice,
+                requestId: Int,
+                characteristic: BluetoothGattCharacteristic,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray,
+            ) {
+                if (responseNeeded) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                 }
             }
         }
 
-        override fun onCharacteristicWrite(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            status: Int
-        ) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                val peerId = gatt.device.address
-                val queue = outgoingQueues[peerId]
-                val item = queue?.firstOrNull()
-                if (item != null) {
-                    queue.removeAt(0)
-                    scope.launch { repository.markDelivered(item.first) }
-                    if (queue.isNotEmpty()) {
-                        val next = queue.first()
-                        characteristic.value = next.second
-                        gatt.writeCharacteristic(characteristic)
+    private val gattClientCallback =
+        object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(
+                gatt: BluetoothGatt,
+                status: Int,
+                newState: Int,
+            ) {
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    connections[gatt.device] = gatt
+                    onPeerConnected(gatt.device.address)
+                    gatt.discoverServices()
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    connections.remove(gatt.device)
+                    onPeerDisconnected(gatt.device.address)
+                    gatt.close()
+                }
+            }
+
+            override fun onServicesDiscovered(
+                gatt: BluetoothGatt,
+                status: Int,
+            ) {
+                val characteristic = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                if (characteristic != null) {
+                    gatt.setCharacteristicNotification(characteristic, true)
+                    characteristic.descriptors.forEach { desc ->
+                        desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        gatt.writeDescriptor(desc)
+                    }
+                }
+            }
+
+            override fun onCharacteristicWrite(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int,
+            ) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    val peerId = gatt.device.address
+                    val queue = outgoingQueues[peerId]
+                    val item = queue?.firstOrNull()
+                    if (item != null) {
+                        queue.removeAt(0)
+                        scope.launch { repository.markDelivered(item.first) }
+                        if (queue.isNotEmpty()) {
+                            val next = queue.first()
+                            characteristic.value = next.second
+                            gatt.writeCharacteristic(characteristic)
+                        }
                     }
                 }
             }
         }
-    }
 
-    private val scanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult?) {
-            val device = result?.device ?: return
-            if (!connections.containsKey(device)) {
-                val gatt = device.connectGatt(appContext, false, gattClientCallback)
-                connections[device] = gatt
+    private val scanCallback =
+        object : ScanCallback() {
+            override fun onScanResult(
+                callbackType: Int,
+                result: ScanResult?,
+            ) {
+                val device = result?.device ?: return
+                if (!connections.containsKey(device)) {
+                    val gatt = device.connectGatt(appContext, false, gattClientCallback)
+                    connections[device] = gatt
+                }
             }
         }
-    }
 
     private fun startAdvertising() {
-        val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setConnectable(true)
-            .build()
-        val data = AdvertiseData.Builder()
-            .addServiceUuid(ParcelUuid(serviceUuid))
-            .addServiceData(ParcelUuid(serviceUuid), myPeerId)
-            .build()
+        val settings =
+            AdvertiseSettings
+                .Builder()
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setConnectable(true)
+                .build()
+        val data =
+            AdvertiseData
+                .Builder()
+                .addServiceUuid(ParcelUuid(serviceUuid))
+                .addServiceData(ParcelUuid(serviceUuid), myPeerId)
+                .build()
         advertiser?.startAdvertising(settings, data, advertiseCallback)
     }
 
-    private val advertiseCallback = object : AdvertiseCallback() {
-        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            // Advertising started
-        }
+    private val advertiseCallback =
+        object : AdvertiseCallback() {
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                // Advertising started
+            }
 
-        override fun onStartFailure(errorCode: Int) {
-            // handle failure
+            override fun onStartFailure(errorCode: Int) {
+                // handle failure
+            }
         }
-    }
 
     private fun macToBytes(mac: String): ByteArray {
         val parts = mac.split(":")
@@ -235,17 +271,25 @@ class BluetoothMeshService {
         return bytes
     }
 
-    private fun createPacket(peerId: String, text: String): ByteArray {
-        val packet = BitchatPacket(
-            type = MessageType.MESSAGE,
-            senderId = localPeerId,
-            recipientId = macToBytes(peerId),
-            payload = text.toByteArray()
-        )
+    private fun createPacket(
+        peerId: String,
+        text: String,
+    ): ByteArray {
+        val packet =
+            BitchatPacket(
+                type = MessageType.MESSAGE,
+                senderId = localPeerId,
+                recipientId = macToBytes(peerId),
+                payload = text.toByteArray(),
+            )
         return packet.toBytes()
     }
 
-    private fun writeOrQueue(peerId: String, entity: MessageEntity, bytes: ByteArray) {
+    private fun writeOrQueue(
+        peerId: String,
+        entity: MessageEntity,
+        bytes: ByteArray,
+    ) {
         var wrote = false
         val serverCharacteristic = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
         connections.forEach { (device, gatt) ->
@@ -272,29 +316,34 @@ class BluetoothMeshService {
         }
     }
 
-    fun sendMessage(peerId: String, message: String) {
-        val entity = MessageEntity(
-            id = UUID.randomUUID().toString(),
-            sender = "me",
-            content = message,
-            timestamp = System.currentTimeMillis(),
-            isRelay = false,
-            originalSender = null,
-            isPrivate = true,
-            recipientNickname = null,
-            senderPeerId = peerId,
-            deliveryStatus = if (peers.contains(peerId)) "sent" else "sending",
-            retryCount = 0,
-            isFavorite = false,
-            delivered = peers.contains(peerId)
-        )
+    fun sendPrivateMessage(
+        peerId: String,
+        message: String,
+    ) {
+        val entity =
+            MessageEntity(
+                id = UUID.randomUUID().toString(),
+                sender = "me",
+                content = message,
+                timestamp = System.currentTimeMillis(),
+                isRelay = false,
+                originalSender = null,
+                isPrivate = true,
+                recipientNickname = null,
+                senderPeerId = peerId,
+                deliveryStatus = if (peers.contains(peerId)) "sent" else "sending",
+                retryCount = 0,
+                isFavorite = false,
+                delivered = peers.contains(peerId),
+            )
 
         // Prepare BLE packet with our current peer ID in the header
-        val packet = BitchatPacket(
-            MessageType.MESSAGE,
-            myPeerId,
-            message.toByteArray()
-        )
+        val packet =
+            BitchatPacket(
+                MessageType.MESSAGE,
+                myPeerId,
+                message.toByteArray(),
+            )
         val packetBytes = packet.toBytes() // TODO send packet over BLE
 
         scope.launch {
@@ -308,9 +357,34 @@ class BluetoothMeshService {
         }
     }
 
-    fun connectedPeers(): List<String> {
-        return peers.toList()
+    fun sendPublicMessage(message: String) {
+        val entity =
+            MessageEntity(
+                id = UUID.randomUUID().toString(),
+                sender = "me",
+                content = message,
+                timestamp = System.currentTimeMillis(),
+                isRelay = false,
+                originalSender = null,
+                isPrivate = false,
+                recipientNickname = null,
+                senderPeerId = null,
+                deliveryStatus = if (peers.isEmpty()) "sending" else "sent",
+                retryCount = 0,
+                isFavorite = false,
+                delivered = peers.isNotEmpty(),
+            )
+
+        scope.launch {
+            repository.saveMessage(entity)
+            peers.forEach { peer ->
+                val bytes = createPacket(peer, message)
+                writeOrQueue(peer, entity, bytes)
+            }
+        }
     }
+
+    fun connectedPeers(): List<String> = peers.toList()
 
     fun wipeAllData() {
         scope.launch { repository.wipeAll() }
