@@ -10,6 +10,9 @@ import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
 import com.example.bitchat.NoiseEncryptionService
+import com.example.bitchat.PeerIdentityManager
+import com.example.bitchat.BitchatPacket
+import com.example.bitchat.MessageType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -27,6 +30,11 @@ class BluetoothMeshService {
     private val repository = ChatRepository(appContext)
     private val scope = CoroutineScope(Dispatchers.IO)
     private val peers = mutableSetOf<String>()
+    private val identity = PeerIdentityManager
+
+    /** Current ephemeral peer ID used by this service. */
+    val myPeerId: ByteArray
+        get() = identity.peerId
 
     fun start() {
         startScanning()
@@ -36,6 +44,15 @@ class BluetoothMeshService {
     fun stop() {
         scanner?.stopScan(scanCallback)
         advertiser?.stopAdvertising(advertiseCallback)
+    }
+
+    /**
+     * Force rotation of the ephemeral peer ID.
+     * Callers can use this to periodically change the identifier
+     * or reset it across app restarts.
+     */
+    fun rotatePeerId() {
+        identity.rotate()
     }
 
     fun onPeerConnected(peerId: String, nickname: String? = null) {
@@ -75,6 +92,7 @@ class BluetoothMeshService {
             .build()
         val data = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(serviceUuid))
+            .addServiceData(ParcelUuid(serviceUuid), myPeerId)
             .build()
         advertiser?.startAdvertising(settings, data, advertiseCallback)
     }
@@ -105,6 +123,14 @@ class BluetoothMeshService {
             isFavorite = false,
             delivered = peers.contains(peerId)
         )
+
+        // Prepare BLE packet with our current peer ID in the header
+        val packet = BitchatPacket(
+            MessageType.MESSAGE,
+            myPeerId,
+            message.toByteArray()
+        )
+        val packetBytes = packet.toBytes() // TODO send packet over BLE
 
         scope.launch {
             repository.saveMessage(entity)
