@@ -21,6 +21,17 @@ cd android_app
 
 Target SDK 33, minSdk 26+. Required permissions are declared in the manifest for Bluetooth and location.
 
+## Runtime Permissions
+
+The app requires several permissions at runtime:
+
+- `BLUETOOTH_SCAN`, `BLUETOOTH_ADVERTISE` and `BLUETOOTH_CONNECT` – allow peering with nearby devices over Bluetooth LE.
+- `ACCESS_FINE_LOCATION` – required by Android to perform Bluetooth device discovery.
+- `FOREGROUND_SERVICE` – keeps the mesh service running while the app is in the background.
+- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` – ensures the service stays alive for reliable message relaying.
+
+These permissions are requested on launch to start the mesh service automatically.
+
 ## Testing & Linting
 
 Run unit tests and Kotlin formatting checks:
@@ -28,3 +39,13 @@ Run unit tests and Kotlin formatting checks:
 ```
 ./gradlew test ktlintCheck
 ```
+
+## Basic Usage
+
+Launching the app automatically starts the background mesh service once the above permissions are granted. Messages are exchanged directly between nearby peers—no servers are involved. You can interact using a few built‑in chat commands:
+
+- `/msg <peerId> <message>` – send a private message to a peer.
+- `/who` – list currently connected peers.
+- `/wipe` – erase all local data and restart the service.
+
+All conversations occur only on your device and the devices you connect with. No data is sent to any third‑party servers.
