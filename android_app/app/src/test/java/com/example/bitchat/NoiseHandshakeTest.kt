@@ -1,12 +1,12 @@
 package com.example.bitchat
 
+import com.southernstorm.noise.protocol.HandshakeState
+import com.southernstorm.noise.protocol.Noise
 import io.mockk.spyk
 import io.mockk.verify
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import com.southernstorm.noise.protocol.HandshakeState
-import com.southernstorm.noise.protocol.Noise
 
 class NoiseHandshakeTest {
     @Test
