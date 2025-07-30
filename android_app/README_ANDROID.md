@@ -49,3 +49,25 @@ Launching the app automatically starts the background mesh service once the abov
 - `/wipe` – erase all local data and restart the service.
 
 All conversations occur only on your device and the devices you connect with. No data is sent to any third‑party servers.
+
+## High-Level Test Strategy
+
+This project uses Gradle with Kotlin and Jetpack Compose. Automated testing ensures robustness across core components and the user interface.
+
+### Types of Tests
+
+- **Unit Tests** – Validate individual classes such as view models, repositories, and utility functions in isolation. Use JUnit and MockK for mocking dependencies.
+- **Integration Tests** – Exercise multiple modules together, including persistence and networking layers. Run these as instrumented tests on an emulator with `./gradlew connectedCheck`.
+- **Functional/UI Tests** – Verify complete user flows using Compose UI testing or Espresso. Examples include starting the mesh service, exchanging messages, and wiping local data.
+
+### Compile & Run Verification
+
+To ensure all Kotlin sources build and run properly:
+
+1. **Assemble builds**: `./gradlew assembleDebug assembleRelease` compiles every module and produces APKs. This catches syntax errors or missing dependencies.
+2. **Run unit tests**: `./gradlew test` executes all JUnit tests, confirming that business logic executes as expected with the latest code.
+3. **Run instrumented tests**: `./gradlew connectedAndroidTest` launches the app on a device or emulator to confirm runtime behavior.
+4. **Static analysis**: `./gradlew lint ktlintCheck` verifies code style and common Android issues.
+
+Successful completion of these steps confirms that every Kotlin file compiles and that core features behave as intended.
+
