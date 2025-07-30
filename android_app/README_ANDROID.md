@@ -25,10 +25,10 @@ Target SDK 33, minSdk 26+. Required permissions are declared in the manifest for
 
 The app requires several permissions at runtime:
 
-- `BLUETOOTH_SCAN`, `BLUETOOTH_ADVERTISE` and `BLUETOOTH_CONNECT` – allow peering with nearby devices over Bluetooth LE.
-- `ACCESS_FINE_LOCATION` – required by Android to perform Bluetooth device discovery.
-- `FOREGROUND_SERVICE` – keeps the mesh service running while the app is in the background.
-- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` – ensures the service stays alive for reliable message relaying.
+- `BLUETOOTH_SCAN`, `BLUETOOTH_ADVERTISE` and `BLUETOOTH_CONNECT` – allow peering with nearby devices over Bluetooth LE for discovery and data transfer.
+- `ACCESS_FINE_LOCATION` – Android ties Bluetooth scanning to location access; without it the system blocks discovery of peers.
+- `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_CONNECTED_DEVICE` – keep the mesh service alive in the background and permit sending data while running as a foreground service.
+- `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` – prevents aggressive power management from killing the service so messages can relay even when the phone is idle.
 
 These permissions are requested on launch to start the mesh service automatically.
 

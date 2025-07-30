@@ -9,15 +9,19 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 
@@ -28,6 +32,7 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.BLUETOOTH_ADVERTISE,
             Manifest.permission.BLUETOOTH_CONNECT,
             Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE,
         )
 
     private val permissionLauncher =
@@ -111,7 +116,7 @@ fun ChatScreen(service: BluetoothMeshService) {
         Text("Peers: " + peers.joinToString(", "))
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(messages) { msg ->
-                Text(text = "${msg.sender} @ " + java.util.Date(msg.timestamp).toString() + ": ${msg.content}")
+                MessageItem(msg)
             }
         }
         Row {
@@ -131,10 +136,41 @@ fun ChatScreen(service: BluetoothMeshService) {
     }
 }
 
+@Composable
+fun MessageItem(msg: MessageEntity) {
+    var showDetails by remember { mutableStateOf(false) }
+    val bg = if (msg.sender == "me") {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .background(bg)
+            .clickable { showDetails = !showDetails }
+            .padding(8.dp)
+    ) {
+        Text(text = "${if (msg.sender == "me") "Me" else msg.sender}: ${msg.content}")
+        if (showDetails) {
+            Text(
+                text = java.util.Date(msg.timestamp).toString(),
+                style = MaterialTheme.typography.bodySmall
+            )
+            msg.deliveryStatus?.let {
+                Text(text = it, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
 fun handleInput(
     input: String,
     service: BluetoothMeshService,
 ) {
+    Log.d("ChatScreen", "User input: $input")
     when {
         input.startsWith("/msg ") -> {
             val rest = input.removePrefix("/msg ")
@@ -142,13 +178,16 @@ fun handleInput(
             if (parts.size == 2) {
                 val peer = parts[0]
                 val content = parts[1]
+                Log.d("ChatScreen", "Sending private message to $peer: $content")
                 service.sendPrivateMessage(peer, content)
             }
         }
         input.startsWith("/wipe") -> {
+            Log.d("ChatScreen", "Wiping all data")
             service.wipeAllData()
         }
         else -> {
+            Log.d("ChatScreen", "Sending public message: $input")
             service.sendPublicMessage(input)
         }
     }

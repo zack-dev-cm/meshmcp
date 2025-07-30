@@ -4,6 +4,7 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.os.ParcelUuid
+import android.util.Log
 import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
@@ -158,6 +159,28 @@ class BluetoothMeshService {
             ) {
                 if (responseNeeded) {
                     gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+                }
+                val packet = BitchatPacket.from(value)
+                if (packet?.type == MessageType.MESSAGE) {
+                    val text = packet.payload.toString(Charsets.UTF_8)
+                    val sender = device.address
+                    val entity = MessageEntity(
+                        id = UUID.randomUUID().toString(),
+                        sender = sender,
+                        content = text,
+                        timestamp = packet.timestamp,
+                        isRelay = false,
+                        originalSender = null,
+                        isPrivate = packet.recipientId != null,
+                        recipientNickname = null,
+                        senderPeerId = sender,
+                        deliveryStatus = "received",
+                        retryCount = 0,
+                        isFavorite = false,
+                        delivered = true
+                    )
+                    Log.d("BluetoothMeshService", "Received message from $sender: $text")
+                    scope.launch { repository.saveMessage(entity) }
                 }
             }
         }
