@@ -22,6 +22,11 @@ class BluetoothMeshService {
         startAdvertising()
     }
 
+    fun stop() {
+        scanner?.stopScan(scanCallback)
+        advertiser?.stopAdvertising(advertiseCallback)
+    }
+
     private fun startScanning() {
         val filter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(serviceUuid))
