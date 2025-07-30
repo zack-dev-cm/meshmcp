@@ -149,7 +149,7 @@ enum class NoiseMessageType(val id: Byte) {
 data class NoiseMessage(
     val type: NoiseMessageType,
     val sessionId: String,
-    val payload: ByteArray
+    val payload: ByteArray,
 ) {
     fun toBytes(): ByteArray {
         val id = UUID.fromString(sessionId)
