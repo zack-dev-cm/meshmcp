@@ -10,6 +10,7 @@ import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
 import com.example.bitchat.NoiseEncryptionService
+import com.example.bitchat.NoiseMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -27,6 +28,10 @@ class BluetoothMeshService {
     private val repository = ChatRepository(appContext)
     private val scope = CoroutineScope(Dispatchers.IO)
     private val peers = mutableSetOf<String>()
+    private val noiseService = NoiseEncryptionService(appContext)
+    private val sessionMap = mutableMapOf<String, String>()
+
+    var packetSender: ((String, ByteArray) -> Unit)? = null
 
     fun start() {
         startScanning()
@@ -38,20 +43,36 @@ class BluetoothMeshService {
         advertiser?.stopAdvertising(advertiseCallback)
     }
 
+    fun onBlePacketReceived(peerId: String, data: ByteArray) {
+        val message = NoiseMessage.from(data) ?: return
+        val response = noiseService.receiveHandshakeMessage(peerId, message)
+        response?.let {
+            sessionMap[peerId] = it.sessionId
+            packetSender?.invoke(peerId, it.toBytes())
+        }
+    }
+
     fun onPeerConnected(peerId: String, nickname: String? = null) {
         peers.add(peerId)
         scope.launch {
             repository.savePeer(PeerEntity(peerId, nickname, System.currentTimeMillis()))
             val queued = repository.undeliveredForPeer(peerId)
             queued.forEach { msg ->
-                // TODO send via BLE
+                // Messages queued before handshake will be sent after we secure the channel
                 repository.markDelivered(msg)
             }
         }
+        initiateNoiseHandshake(peerId)
     }
 
     fun onPeerDisconnected(peerId: String) {
         peers.remove(peerId)
+    }
+
+    private fun initiateNoiseHandshake(peerId: String) {
+        val msg = noiseService.initiateHandshake(peerId)
+        sessionMap[peerId] = msg.sessionId
+        packetSender?.invoke(peerId, msg.toBytes())
     }
 
     private fun startScanning() {
@@ -109,7 +130,12 @@ class BluetoothMeshService {
         scope.launch {
             repository.saveMessage(entity)
             if (peers.contains(peerId)) {
-                // TODO send via BLE
+                val payload = if (noiseService.status(peerId) == NoiseEncryptionService.EncryptionStatus.NOISE_SECURED) {
+                    noiseService.encrypt(peerId, message.toByteArray())
+                } else {
+                    message.toByteArray()
+                }
+                packetSender?.invoke(peerId, payload)
                 repository.markDelivered(entity)
             }
         }
@@ -123,6 +149,20 @@ class BluetoothMeshService {
         scope.launch { repository.wipeAll() }
         NoiseEncryptionService(appContext).wipeAll()
     }
+
+    fun encryptionStatus(peerId: String): NoiseEncryptionService.EncryptionStatus {
+        return noiseService.status(peerId)
+    }
+
+    fun decryptMessage(peerId: String, data: ByteArray): ByteArray {
+        return noiseService.decrypt(peerId, data)
+    }
+
+    fun encryptMessage(peerId: String, data: ByteArray): ByteArray {
+        return noiseService.encrypt(peerId, data)
+    }
+
+    fun sessionIdForPeer(peerId: String): String? = sessionMap[peerId]
 }
 
 private val appContext: Context

@@ -3,8 +3,6 @@ package com.example.bitchat
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import io.mockk.spyk
-import io.mockk.verify
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -15,22 +13,21 @@ class NoiseBleIntegrationTest {
     @Test
     fun handshakeAndExchange() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val serviceA = spyk(NoiseEncryptionService(context))
-        val serviceB = NoiseEncryptionService(context)
+        val serviceA = BluetoothMeshService()
+        val serviceB = BluetoothMeshService()
 
-        val init = serviceA.initiateHandshake("B")
-        val resp = serviceB.receiveHandshakeMessage("A", init)!!
-        val fin = serviceA.receiveHandshakeMessage("B", resp)!!
-        serviceB.receiveHandshakeMessage("A", fin)
+        serviceA.packetSender = { _, data -> serviceB.onBlePacketReceived("A", data) }
+        serviceB.packetSender = { _, data -> serviceA.onBlePacketReceived("B", data) }
 
-        assertEquals(NoiseEncryptionService.EncryptionStatus.NOISE_SECURED, serviceA.status("B"))
-        assertEquals(NoiseEncryptionService.EncryptionStatus.NOISE_SECURED, serviceB.status("A"))
+        serviceA.onPeerConnected("B")
+        serviceB.onPeerConnected("A")
+
+        assertEquals(NoiseEncryptionService.EncryptionStatus.NOISE_SECURED, serviceA.encryptionStatus("B"))
+        assertEquals(NoiseEncryptionService.EncryptionStatus.NOISE_SECURED, serviceB.encryptionStatus("A"))
 
         val data = "ping".toByteArray()
-        val enc = serviceA.encrypt("B", data)
-        val dec = serviceB.decrypt("A", enc)
+        val enc = serviceA.encryptMessage("B", data)
+        val dec = serviceB.decryptMessage("A", enc)
         assertArrayEquals(data, dec)
-
-        verify { serviceA.initiateHandshake("B") }
     }
 }
