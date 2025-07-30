@@ -48,4 +48,7 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.5.3")
     debugImplementation("androidx.compose.ui:ui-tooling:1.5.3")
+
+    implementation("org.signal.forks:noise-java:0.1.1")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }
