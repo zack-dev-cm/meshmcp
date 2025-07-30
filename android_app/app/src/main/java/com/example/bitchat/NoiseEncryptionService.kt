@@ -1,6 +1,7 @@
 package com.example.bitchat
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Base64
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -51,7 +52,7 @@ class NoiseEncryptionService(context: Context) {
         dh.getPublicKey(staticPublic, 0)
     }
 
-    private fun createPrefs(context: Context): EncryptedSharedPreferences {
+    private fun createPrefs(context: Context): SharedPreferences {
         val masterKey = MasterKey.Builder(context)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
