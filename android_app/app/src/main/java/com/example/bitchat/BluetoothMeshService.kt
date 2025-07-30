@@ -6,6 +6,13 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.os.ParcelUuid
 import java.util.*
+import com.example.bitchat.db.ChatRepository
+import com.example.bitchat.db.MessageEntity
+import com.example.bitchat.db.PeerEntity
+import com.example.bitchat.NoiseEncryptionService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class BluetoothMeshService {
     private val serviceUuid = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
@@ -17,9 +24,29 @@ class BluetoothMeshService {
     private val scanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
     private val advertiser: BluetoothLeAdvertiser? = bluetoothAdapter?.bluetoothLeAdvertiser
 
+    private val repository = ChatRepository(appContext)
+    private val scope = CoroutineScope(Dispatchers.IO)
+    private val peers = mutableSetOf<String>()
+
     fun start() {
         startScanning()
         startAdvertising()
+    }
+
+    fun onPeerConnected(peerId: String, nickname: String? = null) {
+        peers.add(peerId)
+        scope.launch {
+            repository.savePeer(PeerEntity(peerId, nickname, System.currentTimeMillis()))
+            val queued = repository.undeliveredForPeer(peerId)
+            queued.forEach { msg ->
+                // TODO send via BLE
+                repository.markDelivered(msg)
+            }
+        }
+    }
+
+    fun onPeerDisconnected(peerId: String) {
+        peers.remove(peerId)
     }
 
     private fun startScanning() {
@@ -57,12 +84,39 @@ class BluetoothMeshService {
         }
     }
 
-    fun sendMessage(message: String) {
-        // TODO: implement packet encoding and send via GATT
+    fun sendMessage(peerId: String, message: String) {
+        val entity = MessageEntity(
+            id = UUID.randomUUID().toString(),
+            sender = "me",
+            content = message,
+            timestamp = System.currentTimeMillis(),
+            isRelay = false,
+            originalSender = null,
+            isPrivate = true,
+            recipientNickname = null,
+            senderPeerId = peerId,
+            deliveryStatus = if (peers.contains(peerId)) "sent" else "sending",
+            retryCount = 0,
+            isFavorite = false,
+            delivered = peers.contains(peerId)
+        )
+
+        scope.launch {
+            repository.saveMessage(entity)
+            if (peers.contains(peerId)) {
+                // TODO send via BLE
+                repository.markDelivered(entity)
+            }
+        }
     }
 
     fun connectedPeers(): List<String> {
-        return emptyList()
+        return peers.toList()
+    }
+
+    fun wipeAllData() {
+        scope.launch { repository.wipeAll() }
+        NoiseEncryptionService(appContext).wipeAll()
     }
 }
 
