@@ -554,6 +554,7 @@ class BluetoothMeshService {
         entity: MessageEntity,
         bytes: ByteArray,
     ) {
+        Log.d("BluetoothMeshService", "Attempting write to $peerId for ${entity.id}")
         var wrote = false
         val serverCharacteristic = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
         val connection = connections[peerId]
@@ -565,7 +566,11 @@ class BluetoothMeshService {
                     val queue = outgoingQueues.getOrPut(peerId) { Collections.synchronizedList(mutableListOf()) }
                     synchronized(queue) { queue.add(entity to bytes) }
                     wrote = true
+                } else {
+                    Log.w("BluetoothMeshService", "gatt.writeCharacteristic returned false for $peerId")
                 }
+            } else {
+                Log.w("BluetoothMeshService", "Characteristic null for $peerId")
             }
         } ?: run {
             if (connection?.serverConnected == true && serverCharacteristic != null) {
@@ -581,6 +586,7 @@ class BluetoothMeshService {
         if (!wrote) {
             val queue = outgoingQueues.getOrPut(peerId) { Collections.synchronizedList(mutableListOf()) }
             synchronized(queue) { queue.add(entity to bytes) }
+            Log.d("BluetoothMeshService", "Queued message ${entity.id} for $peerId (connection not ready)")
         }
     }
 
