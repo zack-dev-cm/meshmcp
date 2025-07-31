@@ -341,14 +341,12 @@ class BluetoothMeshService {
         val data =
             AdvertiseData
                 .Builder()
-                // Device name increases the advertisement size and can lead to
-                // ADVERTISE_FAILED_DATA_TOO_LARGE on some devices. The peer
-                // ID is already included via service data so we omit the name
-                // to keep the payload small.
+                // Keep payload small to avoid ADVERTISE_FAILED_DATA_TOO_LARGE
                 .setIncludeDeviceName(false)
                 .setIncludeTxPowerLevel(false)
                 .addServiceUuid(ParcelUuid(serviceUuid))
-                .addServiceData(ParcelUuid(serviceUuid), myPeerId)
+                // Peer ID will be exchanged after connection; omitting here keeps packet size small
+                .addManufacturerData(0xFFFF, myPeerId)
                 .build()
         val adv = advertiser
         bluetoothAdapter?.name = myPeerId.toHex()
@@ -371,7 +369,18 @@ class BluetoothMeshService {
 
             override fun onStartFailure(errorCode: Int) {
                 _advertising.value = false
-                Log.e("BluetoothMeshService", "Advertising failed: $errorCode")
+                val reason = when (errorCode) {
+                    AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE -> "DATA_TOO_LARGE"
+                    AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "TOO_MANY_ADVERTISERS"
+                    AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> "ALREADY_STARTED"
+                    AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> "INTERNAL_ERROR"
+                    AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "UNSUPPORTED"
+                    else -> "UNKNOWN"
+                }
+                Log.e(
+                    "BluetoothMeshService",
+                    "Advertising failed: $errorCode ($reason)"
+                )
             }
         }
 

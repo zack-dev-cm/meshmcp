@@ -42,7 +42,8 @@ data class BitchatPacket(
     fun toBytes(): ByteArray {
         val flags = computeFlags()
         val payloadLength = payload.size.toShort()
-        val capacity = 13 + 8 + (if (recipientId != null) 8 else 0) + payload.size + (signature?.size ?: 0)
+        // Header is 14 bytes: version(1)+type(1)+ttl(1)+timestamp(8)+flags(1)+length(2)
+        val capacity = 14 + 8 + (if (recipientId != null) 8 else 0) + payload.size + (signature?.size ?: 0)
         val buffer = ByteBuffer.allocate(capacity).order(ByteOrder.BIG_ENDIAN)
         buffer.put(version.toByte())
         buffer.put(type.id)
@@ -76,7 +77,8 @@ data class BitchatPacket(
         }
 
         fun from(data: ByteArray): BitchatPacket? {
-            if (data.size < 21) return null // minimum header + senderId
+            // Minimum size is header (14 bytes) plus senderId (8 bytes)
+            if (data.size < 22) return null
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN)
             val version = buffer.get().toInt()
             val typeByte = buffer.get()
