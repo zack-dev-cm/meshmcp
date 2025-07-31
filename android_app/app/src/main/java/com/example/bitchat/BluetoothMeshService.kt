@@ -22,11 +22,15 @@ class BluetoothMeshService {
     private val serviceUuid = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
     private val characteristicUuid = UUID.fromString("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D")
 
-    private val bluetoothAdapter: BluetoothAdapter? =
-        (appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+    private val bluetoothAdapter: BluetoothAdapter?
+        get() =
+            (appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
-    private val scanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
-    private val advertiser: BluetoothLeAdvertiser? = bluetoothAdapter?.bluetoothLeAdvertiser
+    private val scanner: BluetoothLeScanner?
+        get() = bluetoothAdapter?.bluetoothLeScanner
+
+    private val advertiser: BluetoothLeAdvertiser?
+        get() = bluetoothAdapter?.bluetoothLeAdvertiser
 
     private val repository = ChatRepository(appContext)
     private val scope = CoroutineScope(Dispatchers.IO)
