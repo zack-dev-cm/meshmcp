@@ -10,6 +10,8 @@ import android.util.Log
 import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
+import com.example.bitchat.BasicMessage
+import com.example.bitchat.DeliveryAck
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -130,7 +132,8 @@ class BluetoothMeshService {
             repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
             val queued = repository.undeliveredForPeer(peerId)
             queued.forEach { msg ->
-                val bytes = createPacket(peerId, msg.content)
+                val basic = BasicMessage(msg.id, msg.content, msg.timestamp)
+                val bytes = createPacket(peerId, basic)
                 writeOrQueue(peerId, msg, bytes)
             }
             outgoingQueues[peerId]?.let { list ->
@@ -228,17 +231,19 @@ class BluetoothMeshService {
                 }
                 val packet = BitchatPacket.from(value)
                 if (packet?.type == MessageType.MESSAGE) {
-                    val text = packet.payload.toString(Charsets.UTF_8)
+                    val msg = BasicMessage.from(packet.payload)
+                    val text = msg?.text ?: packet.payload.toString(Charsets.UTF_8)
+                    val messageId = msg?.id ?: UUID.randomUUID().toString()
                     val peerId = device.address
                     scope.launch {
                         val nick = repository.getPeerNickname(peerId)
                             ?: NicknameGenerator.generate(peerId)
                         val entity =
                             MessageEntity(
-                                id = UUID.randomUUID().toString(),
+                                id = messageId,
                                 sender = nick,
                                 content = text,
-                                timestamp = packet.timestamp,
+                                timestamp = msg?.timestamp ?: packet.timestamp,
                                 isRelay = false,
                                 originalSender = null,
                                 isPrivate = packet.recipientId != null,
@@ -252,6 +257,28 @@ class BluetoothMeshService {
                         Log.d("BluetoothMeshService", "Received message from $peerId: $text")
                         repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
                         repository.saveMessage(entity)
+
+                        val ack = DeliveryAck(
+                            originalMessageId = messageId,
+                            recipientId = myPeerId.toHex(),
+                            recipientNickname = myNickname,
+                            hopCount = 0,
+                        )
+                        val ackPacket = BitchatPacket(
+                            type = MessageType.DELIVERY_ACK,
+                            senderId = myPeerId,
+                            recipientId = macToBytes(peerId),
+                            payload = ack.toBytes(),
+                        )
+                        val ackBytes = ackPacket.toBytes()
+                        val char = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                        char?.value = ackBytes
+                        gattServer?.notifyCharacteristicChanged(device, char, false)
+                    }
+                } else if (packet?.type == MessageType.DELIVERY_ACK) {
+                    val ack = DeliveryAck.from(packet.payload)
+                    ack?.let {
+                        scope.launch { repository.markDelivered(it.originalMessageId) }
                     }
                 }
             }
@@ -402,14 +429,14 @@ class BluetoothMeshService {
 
     private fun createPacket(
         peerId: String,
-        text: String,
+        message: BasicMessage,
     ): ByteArray {
         val packet =
             BitchatPacket(
                 type = MessageType.MESSAGE,
                 senderId = myPeerId,
                 recipientId = macToBytes(peerId),
-                payload = text.toByteArray(),
+                payload = message.toBytes(),
             )
         return packet.toBytes()
     }
@@ -468,7 +495,8 @@ class BluetoothMeshService {
 
         scope.launch {
             repository.saveMessage(entity)
-            val bytes = createPacket(peerId, message)
+            val msg = BasicMessage(entity.id, message)
+            val bytes = createPacket(peerId, msg)
             if (peers.contains(peerId)) {
                 writeOrQueue(peerId, entity, bytes)
             } else {
@@ -498,7 +526,8 @@ class BluetoothMeshService {
         scope.launch {
             repository.saveMessage(entity)
             peers.forEach { peer ->
-                val bytes = createPacket(peer, message)
+                val msg = BasicMessage(entity.id, message)
+                val bytes = createPacket(peer, msg)
                 writeOrQueue(peer, entity, bytes)
             }
         }
