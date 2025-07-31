@@ -1,3 +1,5 @@
+@file:Suppress("WildcardImport")
+
 package com.example.bitchat
 
 import android.bluetooth.*
@@ -36,6 +38,7 @@ class BluetoothMeshService {
     private val _discoveredFlow = MutableStateFlow<List<String>>(emptyList())
     val discoveredPeersFlow: StateFlow<List<String>> = _discoveredFlow
     val messages: Flow<List<MessageEntity>> = repository.messages()
+    val contacts: Flow<List<PeerEntity>> = repository.peers()
     private val identity = PeerIdentityManager
 
     /** Current ephemeral peer ID used by this service. */
@@ -48,6 +51,7 @@ class BluetoothMeshService {
     private val connections = mutableMapOf<BluetoothDevice, BluetoothGatt?>()
     private val outgoingQueues = mutableMapOf<String, MutableList<Pair<MessageEntity, ByteArray>>>()
 
+    @Suppress("BackingPropertyNaming")
     private val localPeerId: ByteArray by lazy {
         val addr = bluetoothAdapter?.address ?: UUID.randomUUID().toString()
         val parts = addr.split(":")
@@ -176,21 +180,22 @@ class BluetoothMeshService {
                 if (packet?.type == MessageType.MESSAGE) {
                     val text = packet.payload.toString(Charsets.UTF_8)
                     val sender = device.address
-                    val entity = MessageEntity(
-                        id = UUID.randomUUID().toString(),
-                        sender = sender,
-                        content = text,
-                        timestamp = packet.timestamp,
-                        isRelay = false,
-                        originalSender = null,
-                        isPrivate = packet.recipientId != null,
-                        recipientNickname = null,
-                        senderPeerId = sender,
-                        deliveryStatus = "received",
-                        retryCount = 0,
-                        isFavorite = false,
-                        delivered = true
-                    )
+                    val entity =
+                        MessageEntity(
+                            id = UUID.randomUUID().toString(),
+                            sender = sender,
+                            content = text,
+                            timestamp = packet.timestamp,
+                            isRelay = false,
+                            originalSender = null,
+                            isPrivate = packet.recipientId != null,
+                            recipientNickname = null,
+                            senderPeerId = sender,
+                            deliveryStatus = "received",
+                            retryCount = 0,
+                            isFavorite = false,
+                            delivered = true,
+                        )
                     Log.d("BluetoothMeshService", "Received message from $sender: $text")
                     scope.launch { repository.saveMessage(entity) }
                 }
