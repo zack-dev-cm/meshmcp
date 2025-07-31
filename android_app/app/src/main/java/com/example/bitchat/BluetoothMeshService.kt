@@ -337,14 +337,31 @@ class BluetoothMeshService {
                 gatt: BluetoothGatt,
                 status: Int,
             ) {
-                val characteristic = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                val characteristic =
+                    gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
                 if (characteristic != null) {
                     gatt.setCharacteristicNotification(characteristic, true)
                     characteristic.descriptors.forEach { desc ->
                         desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                         gatt.writeDescriptor(desc)
                     }
-                    Log.d("BluetoothMeshService", "Services discovered on ${gatt.device.address}")
+                    Log.d(
+                        "BluetoothMeshService",
+                        "Services discovered on ${gatt.device.address}"
+                    )
+
+                    val peerId = gatt.device.address
+                    outgoingQueues[peerId]?.let { queue ->
+                        val item = synchronized(queue) { queue.firstOrNull() }
+                        if (item != null) {
+                            Log.d(
+                                "BluetoothMeshService",
+                                "Flushing queued messages for $peerId after services discovered"
+                            )
+                            characteristic.value = item.second
+                            gatt.writeCharacteristic(characteristic)
+                        }
+                    }
                 }
             }
 
