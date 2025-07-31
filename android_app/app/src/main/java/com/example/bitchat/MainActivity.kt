@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity() {
 @Suppress("FunctionName")
 fun BitchatApp(service: BluetoothMeshService) {
     var selected by remember { mutableStateOf(0) }
-    val screens = listOf("Chat", "Contacts")
+    val screens = listOf("Chat", "Broadcast", "Contacts")
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -136,14 +136,98 @@ fun BitchatApp(service: BluetoothMeshService) {
         },
     ) { inner ->
         when (selected) {
-            0 -> ChatScreen(service, Modifier.padding(inner))
+            0 -> PrivateChatScreen(service, Modifier.padding(inner))
+            1 -> PublicChatScreen(service, Modifier.padding(inner))
             else -> ContactsScreen(service)
         }
     }
 }
 
 @Composable
-fun ChatScreen(
+fun PrivateChatScreen(
+    service: BluetoothMeshService,
+    modifier: Modifier = Modifier,
+) {
+    var text by remember { mutableStateOf(TextFieldValue("")) }
+    val messages by service.messages.collectAsState(initial = emptyList())
+    val peers by service.peersFlow.collectAsState(initial = emptyList())
+    val discovered by service.discoveredPeersFlow.collectAsState(initial = emptyList())
+    val scanning by service.scanningFlow.collectAsState(initial = false)
+    val advertising by service.advertisingFlow.collectAsState(initial = false)
+    var target by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(peers) {
+        if (target == null && peers.isNotEmpty()) target = peers.first()
+    }
+
+    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
+        Text("Connected peers: " + peers.joinToString(", "))
+        target?.let { Text("Chatting with $it") }
+        Row(Modifier.padding(vertical = 4.dp)) {
+            peers.forEach { peer ->
+                val selected = peer == target
+                Text(
+                    peer,
+                    modifier =
+                        Modifier
+                            .padding(end = 8.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                            ).clickable { target = peer }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        }
+        Text(if (scanning) "Discovering peers..." else "Discovery stopped")
+        Text(if (advertising) "Advertising as ${service.myPeerId.toHex()}" else "Not advertising")
+        Spacer(Modifier.height(8.dp))
+        if (discovered.isNotEmpty()) {
+            Text("Available peers:")
+            LazyColumn(modifier = Modifier.height(100.dp)) {
+                items(discovered) { addr ->
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { service.connectToPeer(addr) }
+                                .padding(4.dp),
+                    ) {
+                        Text(addr)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        val filtered =
+            messages.filter { msg ->
+                val p = target
+                if (p == null) false else (msg.sender == p || msg.senderPeerId == p)
+            }
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(filtered) { msg ->
+                MessageItem(msg)
+            }
+        }
+        Row {
+            TextField(
+                value = text,
+                onValueChange = { text = it },
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = {
+                val input = text.text
+                text = TextFieldValue("")
+                target?.let { service.sendPrivateMessage(it, input) }
+            }, enabled = target != null) {
+                Text("Send")
+            }
+        }
+    }
+}
+
+@Composable
+fun PublicChatScreen(
     service: BluetoothMeshService,
     modifier: Modifier = Modifier,
 ) {
@@ -191,7 +275,7 @@ fun ChatScreen(
             Button(onClick = {
                 val input = text.text
                 text = TextFieldValue("")
-                handleInput(input, service)
+                handlePublicInput(input, service)
             }) {
                 Text("Send")
             }
@@ -236,7 +320,7 @@ fun MessageItem(msg: MessageEntity) {
     }
 }
 
-fun handleInput(
+fun handlePublicInput(
     input: String,
     service: BluetoothMeshService,
 ) {
