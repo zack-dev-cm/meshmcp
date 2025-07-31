@@ -1,3 +1,5 @@
+@file:Suppress("WildcardImport")
+
 package com.example.bitchat
 
 import android.Manifest
@@ -13,11 +15,11 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -29,13 +31,14 @@ import com.example.bitchat.db.MessageEntity
 class MainActivity : ComponentActivity() {
     private val permissions: Array<String>
         get() {
-            val list = mutableListOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_ADVERTISE,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-            )
+            val list =
+                mutableListOf(
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_ADVERTISE,
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                )
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 list += Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE
             }
@@ -99,7 +102,7 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             MaterialTheme {
-                meshService?.let { ChatScreen(it.bluetoothService) }
+                meshService?.let { BitchatApp(it.bluetoothService) }
             }
         }
     }
@@ -114,23 +117,53 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun ChatScreen(service: BluetoothMeshService) {
+@Suppress("FunctionName")
+fun BitchatApp(service: BluetoothMeshService) {
+    var selected by remember { mutableStateOf(0) }
+    val screens = listOf("Chat", "Contacts")
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                screens.forEachIndexed { index, title ->
+                    NavigationBarItem(
+                        selected = selected == index,
+                        onClick = { selected = index },
+                        label = { Text(title) },
+                        icon = {},
+                    )
+                }
+            }
+        },
+    ) { inner ->
+        when (selected) {
+            0 -> ChatScreen(service, Modifier.padding(inner))
+            else -> ContactsScreen(service)
+        }
+    }
+}
+
+@Composable
+fun ChatScreen(
+    service: BluetoothMeshService,
+    modifier: Modifier = Modifier,
+) {
     var text by remember { mutableStateOf(TextFieldValue("")) }
     val messages by service.messages.collectAsState(initial = emptyList())
     val peers by service.peersFlow.collectAsState(initial = emptyList())
     val discovered by service.discoveredPeersFlow.collectAsState(initial = emptyList())
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
         Text("Peers: " + peers.joinToString(", "))
         if (discovered.isNotEmpty()) {
             Text("Available peers:")
             LazyColumn(modifier = Modifier.height(100.dp)) {
                 items(discovered) { addr ->
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { service.connectToPeer(addr) }
-                            .padding(4.dp)
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { service.connectToPeer(addr) }
+                                .padding(4.dp),
                     ) {
                         Text(addr)
                     }
@@ -162,25 +195,29 @@ fun ChatScreen(service: BluetoothMeshService) {
 @Composable
 fun MessageItem(msg: MessageEntity) {
     var showDetails by remember { mutableStateOf(false) }
-    val bg = if (msg.sender == "me") {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.secondaryContainer
-    }
+    val bg =
+        if (msg.sender == "me") {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.secondaryContainer
+        }
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .background(bg)
-            .clickable { showDetails = !showDetails }
-            .padding(8.dp)
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+                .clip(MaterialTheme.shapes.medium)
+                .background(bg)
+                .clickable { showDetails = !showDetails }
+                .padding(8.dp),
     ) {
-        Text(text = "${if (msg.sender == "me") "Me" else msg.sender}: ${msg.content}")
+        val from = if (msg.sender == "me") "Me" else msg.sender
+        val to = if (msg.sender == "me") msg.senderPeerId ?: "public" else "Me"
+        Text(text = "$from → $to: ${msg.content}")
         if (showDetails) {
             Text(
                 text = java.util.Date(msg.timestamp).toString(),
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
             )
             if (msg.deliveryStatus != null) {
                 Text(
