@@ -68,6 +68,9 @@ class BluetoothMeshService {
     private val connections = mutableMapOf<BluetoothDevice, BluetoothGatt?>()
     private val outgoingQueues = mutableMapOf<String, MutableList<Pair<MessageEntity, ByteArray>>>()
 
+    private var advertiseNameLength = 7
+    private var advertiseRetryAttempted = false
+
     @Suppress("BackingPropertyNaming")
     private val localPeerId: ByteArray by lazy {
         val addr = bluetoothAdapter?.address ?: UUID.randomUUID().toString()
@@ -368,6 +371,7 @@ class BluetoothMeshService {
 
     private fun startAdvertising() {
         Log.d("BluetoothMeshService", "startAdvertising() called")
+        val advName = myNickname.take(advertiseNameLength)
         val settings =
             AdvertiseSettings
                 .Builder()
@@ -382,11 +386,11 @@ class BluetoothMeshService {
                 .addServiceUuid(ParcelUuid(serviceUuid))
                 .build()
         val adv = advertiser
-        bluetoothAdapter?.name = myNickname
+        bluetoothAdapter?.name = advName
         if (adv != null) {
             _advertising.value = true
             adv.startAdvertising(settings, data, advertiseCallback)
-            Log.d("BluetoothMeshService", "Advertising started as $myNickname")
+            Log.d("BluetoothMeshService", "Advertising started as $advName")
         } else {
             _advertising.value = false
             Log.w("BluetoothMeshService", "Advertiser not available")
@@ -414,6 +418,17 @@ class BluetoothMeshService {
                     "BluetoothMeshService",
                     "Advertising failed: $errorCode ($reason)"
                 )
+                if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE && !advertiseRetryAttempted) {
+                    advertiseRetryAttempted = true
+                    advertiseNameLength = maxOf(4, advertiseNameLength - 2)
+                    val shorter = myNickname.take(advertiseNameLength)
+                    Log.w(
+                        "BluetoothMeshService",
+                        "Retrying advertising with shorter name: $shorter"
+                    )
+                    advertiser?.stopAdvertising(this)
+                    startAdvertising()
+                }
             }
         }
 
