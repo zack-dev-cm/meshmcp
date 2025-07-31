@@ -57,6 +57,9 @@ class BluetoothMeshService {
     val myPeerId: ByteArray
         get() = identity.peerId
 
+    val myNickname: String
+        get() = NicknameGenerator.generate(myPeerId.toHex())
+
     private val bluetoothManager: BluetoothManager? =
         appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private var gattServer: BluetoothGattServer? = null
@@ -123,7 +126,8 @@ class BluetoothMeshService {
         peers.add(peerId)
         _peersFlow.value = peers.toList()
         scope.launch {
-            repository.savePeer(PeerEntity(peerId, nickname, System.currentTimeMillis()))
+            val nick = nickname ?: repository.getPeerNickname(peerId) ?: NicknameGenerator.generate(peerId)
+            repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
             val queued = repository.undeliveredForPeer(peerId)
             queued.forEach { msg ->
                 val bytes = createPacket(peerId, msg.content)
@@ -225,25 +229,30 @@ class BluetoothMeshService {
                 val packet = BitchatPacket.from(value)
                 if (packet?.type == MessageType.MESSAGE) {
                     val text = packet.payload.toString(Charsets.UTF_8)
-                    val sender = device.address
-                    val entity =
-                        MessageEntity(
-                            id = UUID.randomUUID().toString(),
-                            sender = sender,
-                            content = text,
-                            timestamp = packet.timestamp,
-                            isRelay = false,
-                            originalSender = null,
-                            isPrivate = packet.recipientId != null,
-                            recipientNickname = null,
-                            senderPeerId = sender,
-                            deliveryStatus = "received",
-                            retryCount = 0,
-                            isFavorite = false,
-                            delivered = true,
-                        )
-                    Log.d("BluetoothMeshService", "Received message from $sender: $text")
-                    scope.launch { repository.saveMessage(entity) }
+                    val peerId = device.address
+                    scope.launch {
+                        val nick = repository.getPeerNickname(peerId)
+                            ?: NicknameGenerator.generate(peerId)
+                        val entity =
+                            MessageEntity(
+                                id = UUID.randomUUID().toString(),
+                                sender = nick,
+                                content = text,
+                                timestamp = packet.timestamp,
+                                isRelay = false,
+                                originalSender = null,
+                                isPrivate = packet.recipientId != null,
+                                recipientNickname = null,
+                                senderPeerId = peerId,
+                                deliveryStatus = "received",
+                                retryCount = 0,
+                                isFavorite = false,
+                                delivered = true,
+                            )
+                        Log.d("BluetoothMeshService", "Received message from $peerId: $text")
+                        repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
+                        repository.saveMessage(entity)
+                    }
                 }
             }
         }
@@ -341,19 +350,16 @@ class BluetoothMeshService {
         val data =
             AdvertiseData
                 .Builder()
-                // Keep payload small to avoid ADVERTISE_FAILED_DATA_TOO_LARGE
-                .setIncludeDeviceName(false)
+                .setIncludeDeviceName(true)
                 .setIncludeTxPowerLevel(false)
                 .addServiceUuid(ParcelUuid(serviceUuid))
-                // Peer ID will be exchanged after connection; omitting here keeps packet size small
-                .addManufacturerData(0xFFFF, myPeerId)
                 .build()
         val adv = advertiser
-        bluetoothAdapter?.name = myPeerId.toHex()
+        bluetoothAdapter?.name = myNickname
         if (adv != null) {
             _advertising.value = true
             adv.startAdvertising(settings, data, advertiseCallback)
-            Log.d("BluetoothMeshService", "Advertising started as ${myPeerId.toHex()}")
+            Log.d("BluetoothMeshService", "Advertising started as $myNickname")
         } else {
             _advertising.value = false
             Log.w("BluetoothMeshService", "Advertiser not available")

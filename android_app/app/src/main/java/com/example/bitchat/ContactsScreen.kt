@@ -43,7 +43,9 @@ private fun ContactRow(
                 .clickable { onSelect(peer.peerId) }
                 .padding(8.dp),
     ) {
-        Text(peer.peerId)
-        peer.nickname?.let { Text(it) }
+        Text(peer.nickname ?: peer.peerId)
+        if (peer.nickname != null) {
+            Text(peer.peerId)
+        }
     }
 }
