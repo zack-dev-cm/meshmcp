@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.util.*
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 
 data class PeerConnection(
     var gatt: BluetoothGatt? = null,
@@ -71,7 +73,7 @@ class BluetoothMeshService {
         appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private var gattServer: BluetoothGattServer? = null
     private val connections = mutableMapOf<String, PeerConnection>()
-    private val outgoingQueues = mutableMapOf<String, MutableList<Pair<MessageEntity, ByteArray>>>()
+    private val outgoingQueues = ConcurrentHashMap<String, MutableList<Pair<MessageEntity, ByteArray>>>()
 
     private var advertiseNameLength = 7
     private var advertiseRetryAttempted = false
@@ -145,12 +147,12 @@ class BluetoothMeshService {
                 writeOrQueue(peerId, msg, bytes)
             }
             outgoingQueues[peerId]?.let { list ->
-                val iterator = list.iterator()
-                while (iterator.hasNext()) {
-                    val (ent, data) = iterator.next()
-                    writeOrQueue(peerId, ent, data)
-                    iterator.remove()
+                val items: List<Pair<MessageEntity, ByteArray>>
+                synchronized(list) {
+                    items = list.toList()
+                    list.clear()
                 }
+                items.forEach { (ent, data) -> writeOrQueue(peerId, ent, data) }
             }
         }
     }
@@ -355,14 +357,18 @@ class BluetoothMeshService {
                     Log.d("BluetoothMeshService", "Write successful to ${gatt.device.address}")
                     val peerId = gatt.device.address
                     val queue = outgoingQueues[peerId]
-                    val item = queue?.firstOrNull()
-                    if (item != null) {
-                        queue.removeAt(0)
-                        scope.launch { repository.markDelivered(item.first) }
-                        if (queue.isNotEmpty()) {
-                            val next = queue.first()
-                            characteristic.value = next.second
-                            gatt.writeCharacteristic(characteristic)
+                    queue?.let { q ->
+                        synchronized(q) {
+                            val item = q.firstOrNull()
+                            if (item != null) {
+                                q.removeAt(0)
+                                scope.launch { repository.markDelivered(item.first) }
+                                if (q.isNotEmpty()) {
+                                    val next = q.first()
+                                    characteristic.value = next.second
+                                    gatt.writeCharacteristic(characteristic)
+                                }
+                            }
                         }
                     }
                 }
@@ -556,7 +562,8 @@ class BluetoothMeshService {
             if (char != null) {
                 char.value = bytes
                 if (gatt.writeCharacteristic(char)) {
-                    outgoingQueues.getOrPut(peerId) { mutableListOf() }.add(entity to bytes)
+                    val queue = outgoingQueues.getOrPut(peerId) { Collections.synchronizedList(mutableListOf()) }
+                    synchronized(queue) { queue.add(entity to bytes) }
                     wrote = true
                 }
             }
@@ -572,7 +579,8 @@ class BluetoothMeshService {
             }
         }
         if (!wrote) {
-            outgoingQueues.getOrPut(peerId) { mutableListOf() }.add(entity to bytes)
+            val queue = outgoingQueues.getOrPut(peerId) { Collections.synchronizedList(mutableListOf()) }
+            synchronized(queue) { queue.add(entity to bytes) }
         }
     }
 
@@ -604,7 +612,8 @@ class BluetoothMeshService {
             if (peers.contains(peerId)) {
                 writeOrQueue(peerId, entity, bytes)
             } else {
-                outgoingQueues.getOrPut(peerId) { mutableListOf() }.add(entity to bytes)
+                val queue = outgoingQueues.getOrPut(peerId) { Collections.synchronizedList(mutableListOf()) }
+                synchronized(queue) { queue.add(entity to bytes) }
             }
         }
     }
