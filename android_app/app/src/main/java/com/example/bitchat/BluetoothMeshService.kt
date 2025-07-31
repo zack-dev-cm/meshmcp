@@ -12,10 +12,12 @@ import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.util.*
 
 class BluetoothMeshService {
@@ -34,6 +36,8 @@ class BluetoothMeshService {
 
     private val repository = ChatRepository(appContext)
     private val scope = CoroutineScope(Dispatchers.IO)
+    private var scanRestartJob: kotlinx.coroutines.Job? = null
+    private val scanRestartInterval = 15_000L
     private val peers = mutableSetOf<String>()
     private val _peersFlow = MutableStateFlow<List<String>>(emptyList())
     val peersFlow: StateFlow<List<String>> = _peersFlow
@@ -88,6 +92,7 @@ class BluetoothMeshService {
     fun stop() {
         Log.d("BluetoothMeshService", "stop() called")
         scanner?.stopScan(scanCallback)
+        scanRestartJob?.cancel()
         advertiser?.stopAdvertising(advertiseCallback)
         gattServer?.close()
         gattServer = null
@@ -156,6 +161,17 @@ class BluetoothMeshService {
             _scanning.value = true
             scanner?.startScan(listOf(filter), settings, scanCallback)
             Log.d("BluetoothMeshService", "Scanning started")
+            scanRestartJob?.cancel()
+            scanRestartJob = scope.launch {
+                while (_scanning.value) {
+                    delay(scanRestartInterval)
+                    scanner?.let {
+                        Log.d("BluetoothMeshService", "Restarting scan")
+                        it.stopScan(scanCallback)
+                        it.startScan(listOf(filter), settings, scanCallback)
+                    }
+                }
+            }
         } else {
             _scanning.value = false
             Log.w("BluetoothMeshService", "Scanner not available")
@@ -470,8 +486,13 @@ class BluetoothMeshService {
     }
 
     fun connectToPeer(address: String) {
+        if (!isValidMac(address)) {
+            Log.w("BluetoothMeshService", "Ignoring invalid address: $address")
+            return
+        }
         val device = bluetoothAdapter?.getRemoteDevice(address) ?: return
         if (!connections.containsKey(device)) {
+            Log.d("BluetoothMeshService", "Attempting connection to $address")
             val gatt = device.connectGatt(appContext, false, gattClientCallback)
             connections[device] = gatt
         }
