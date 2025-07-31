@@ -18,23 +18,29 @@ import com.example.bitchat.db.PeerEntity
 
 @Composable
 @Suppress("FunctionName")
-fun ContactsScreen(service: BluetoothMeshService) {
+fun ContactsScreen(
+    service: BluetoothMeshService,
+    onSelect: (String) -> Unit = {},
+) {
     val peers by service.contacts.collectAsState(initial = emptyList())
     LazyColumn(modifier = Modifier.padding(16.dp)) {
         items(peers) { peer ->
-            ContactRow(peer)
+            ContactRow(peer) { onSelect(it) }
         }
     }
 }
 
 @Composable
 @Suppress("FunctionName")
-private fun ContactRow(peer: PeerEntity) {
+private fun ContactRow(
+    peer: PeerEntity,
+    onSelect: (String) -> Unit,
+) {
     Column(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clickable { }
+                .clickable { onSelect(peer.peerId) }
                 .padding(8.dp),
     ) {
         Text(peer.peerId)

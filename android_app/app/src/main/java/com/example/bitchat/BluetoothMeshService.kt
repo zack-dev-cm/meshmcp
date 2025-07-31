@@ -143,6 +143,8 @@ class BluetoothMeshService {
 
     private fun startScanning() {
         Log.d("BluetoothMeshService", "startScanning() called")
+        discovered.clear()
+        _discoveredFlow.value = emptyList()
         val filter =
             ScanFilter
                 .Builder()
