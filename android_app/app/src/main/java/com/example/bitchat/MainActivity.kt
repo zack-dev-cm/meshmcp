@@ -189,7 +189,7 @@ fun PrivateChatScreen(
             }
         }
         Text(if (scanning) "Discovering peers..." else "Discovery stopped")
-        Text(if (advertising) "Advertising as ${service.myPeerId.toHex()}" else "Not advertising")
+        Text(if (advertising) "Advertising as ${service.myNickname}" else "Not advertising")
         Spacer(Modifier.height(8.dp))
         if (discovered.isNotEmpty()) {
             Text("Available peers:")
@@ -250,7 +250,7 @@ fun PublicChatScreen(
     Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
         Text("Peers: " + peers.joinToString(", "))
         Text(if (scanning) "Discovering peers..." else "Discovery stopped")
-        Text(if (advertising) "Advertising as ${service.myPeerId.toHex()}" else "Not advertising")
+        Text(if (advertising) "Advertising as ${service.myNickname}" else "Not advertising")
         Spacer(Modifier.height(8.dp))
         if (discovered.isNotEmpty()) {
             Text("Available peers:")

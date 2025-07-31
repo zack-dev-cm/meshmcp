@@ -35,6 +35,11 @@ class ChatRepository(
             peerDao.upsert(peer)
         }
 
+    suspend fun getPeerNickname(peerId: String): String? =
+        withContext(Dispatchers.IO) {
+            peerDao.getById(peerId)?.nickname
+        }
+
     suspend fun wipeAll() =
         withContext(Dispatchers.IO) {
             messageDao.wipe()
