@@ -212,7 +212,17 @@ class BluetoothMeshService {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     connections[device] = null
                     onPeerConnected(device.address)
-                    Log.d("BluetoothMeshService", "GATT server connected: ${device.address}")
+                    val hasGatt = connections.any { (d, g) ->
+                        d.address == device.address && g != null
+                    }
+                    if (!hasGatt) {
+                        val gatt = device.connectGatt(appContext, false, gattClientCallback)
+                        connections[device] = gatt
+                    }
+                    Log.d(
+                        "BluetoothMeshService",
+                        "GATT server connected: ${device.address}"
+                    )
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     connections.remove(device)
                     onPeerDisconnected(device.address)
