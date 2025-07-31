@@ -151,9 +151,14 @@ fun ChatScreen(
     val messages by service.messages.collectAsState(initial = emptyList())
     val peers by service.peersFlow.collectAsState(initial = emptyList())
     val discovered by service.discoveredPeersFlow.collectAsState(initial = emptyList())
+    val scanning by service.scanningFlow.collectAsState(initial = false)
+    val advertising by service.advertisingFlow.collectAsState(initial = false)
 
     Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
         Text("Peers: " + peers.joinToString(", "))
+        Text(if (scanning) "Discovering peers..." else "Discovery stopped")
+        Text(if (advertising) "Advertising as ${service.myPeerId.toHex()}" else "Not advertising")
+        Spacer(Modifier.height(8.dp))
         if (discovered.isNotEmpty()) {
             Text("Available peers:")
             LazyColumn(modifier = Modifier.height(100.dp)) {
@@ -170,6 +175,8 @@ fun ChatScreen(
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        Text("Tap a peer above to connect. Use '/msg <peer> <text>' for private messages or type below for public chat.")
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(messages) { msg ->
                 MessageItem(msg)
