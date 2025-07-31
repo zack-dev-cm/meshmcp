@@ -22,6 +22,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.util.*
 
+data class PeerConnection(
+    var gatt: BluetoothGatt? = null,
+    var serverConnected: Boolean = false,
+)
+
 class BluetoothMeshService {
     private val serviceUuid = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
     private val characteristicUuid = UUID.fromString("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D")
@@ -65,7 +70,7 @@ class BluetoothMeshService {
     private val bluetoothManager: BluetoothManager? =
         appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private var gattServer: BluetoothGattServer? = null
-    private val connections = mutableMapOf<BluetoothDevice, BluetoothGatt?>()
+    private val connections = mutableMapOf<String, PeerConnection>()
     private val outgoingQueues = mutableMapOf<String, MutableList<Pair<MessageEntity, ByteArray>>>()
 
     private var advertiseNameLength = 7
@@ -104,7 +109,7 @@ class BluetoothMeshService {
         advertiser?.stopAdvertising(advertiseCallback)
         gattServer?.close()
         gattServer = null
-        connections.values.forEach { it?.close() }
+        connections.values.forEach { it.gatt?.close() }
         connections.clear()
         peers.clear()
         discovered.clear()
@@ -152,6 +157,12 @@ class BluetoothMeshService {
 
     fun onPeerDisconnected(peerId: String) {
         Log.d("BluetoothMeshService", "Peer disconnected: $peerId")
+        val conn = connections[peerId]
+        if (conn != null) {
+            if (!conn.serverConnected && conn.gatt == null) {
+                connections.remove(peerId)
+            }
+        }
         peers.remove(peerId)
         _peersFlow.value = peers.toList()
     }
@@ -209,14 +220,19 @@ class BluetoothMeshService {
                 status: Int,
                 newState: Int,
             ) {
+                val address = device.address
+                val conn = connections.getOrPut(address) { PeerConnection() }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    connections[device] = null
-                    onPeerConnected(device.address)
-                    Log.d("BluetoothMeshService", "GATT server connected: ${device.address}")
+                    conn.serverConnected = true
+                    onPeerConnected(address)
+                    Log.d("BluetoothMeshService", "GATT server connected: $address")
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    connections.remove(device)
-                    onPeerDisconnected(device.address)
-                    Log.d("BluetoothMeshService", "GATT server disconnected: ${device.address}")
+                    conn.serverConnected = false
+                    onPeerDisconnected(address)
+                    if (conn.gatt == null) {
+                        connections.remove(address)
+                    }
+                    Log.d("BluetoothMeshService", "GATT server disconnected: $address")
                 }
             }
 
@@ -294,16 +310,21 @@ class BluetoothMeshService {
                 status: Int,
                 newState: Int,
             ) {
+                val address = gatt.device.address
+                val conn = connections.getOrPut(address) { PeerConnection() }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    connections[gatt.device] = gatt
-                    onPeerConnected(gatt.device.address)
-                    Log.d("BluetoothMeshService", "GATT client connected: ${gatt.device.address}")
+                    conn.gatt = gatt
+                    onPeerConnected(address)
+                    Log.d("BluetoothMeshService", "GATT client connected: $address")
                     gatt.discoverServices()
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    connections.remove(gatt.device)
-                    onPeerDisconnected(gatt.device.address)
+                    conn.gatt = null
                     gatt.close()
-                    Log.d("BluetoothMeshService", "GATT client disconnected: ${gatt.device.address}")
+                    onPeerDisconnected(address)
+                    if (!conn.serverConnected) {
+                        connections.remove(address)
+                    }
+                    Log.d("BluetoothMeshService", "GATT client disconnected: $address")
                 }
             }
 
@@ -418,9 +439,10 @@ class BluetoothMeshService {
                 if (discovered.add(device.address)) {
                     _discoveredFlow.value = discovered.toList()
                 }
-                if (!connections.containsKey(device)) {
+                val conn = connections[device.address]
+                if (conn?.gatt == null) {
                     val gatt = device.connectGatt(appContext, false, gattClientCallback)
-                    connections[device] = gatt
+                    connections.getOrPut(device.address) { PeerConnection() }.gatt = gatt
                     Log.d("BluetoothMeshService", "Connecting to ${device.address}")
                 }
             }
@@ -525,18 +547,20 @@ class BluetoothMeshService {
     ) {
         var wrote = false
         val serverCharacteristic = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
-        connections.forEach { (device, gatt) ->
-            if (device.address == peerId) {
-                if (gatt != null) {
-                    val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
-                    if (char != null) {
-                        char.value = bytes
-                        if (gatt.writeCharacteristic(char)) {
-                            outgoingQueues.getOrPut(peerId) { mutableListOf() }.add(entity to bytes)
-                            wrote = true
-                        }
-                    }
-                } else if (serverCharacteristic != null) {
+        val connection = connections[peerId]
+        connection?.gatt?.let { gatt ->
+            val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+            if (char != null) {
+                char.value = bytes
+                if (gatt.writeCharacteristic(char)) {
+                    outgoingQueues.getOrPut(peerId) { mutableListOf() }.add(entity to bytes)
+                    wrote = true
+                }
+            }
+        } ?: run {
+            if (connection?.serverConnected == true && serverCharacteristic != null) {
+                val device = bluetoothAdapter?.getRemoteDevice(peerId)
+                if (device != null) {
                     serverCharacteristic.value = bytes
                     gattServer?.notifyCharacteristicChanged(device, serverCharacteristic, false)
                     scope.launch { repository.markDelivered(entity) }
@@ -616,10 +640,11 @@ class BluetoothMeshService {
             return
         }
         val device = bluetoothAdapter?.getRemoteDevice(address) ?: return
-        if (!connections.containsKey(device)) {
+        val conn = connections[address]
+        if (conn?.gatt == null) {
             Log.d("BluetoothMeshService", "Attempting connection to $address")
             val gatt = device.connectGatt(appContext, false, gattClientCallback)
-            connections[device] = gatt
+            connections.getOrPut(address) { PeerConnection() }.gatt = gatt
         }
     }
 
