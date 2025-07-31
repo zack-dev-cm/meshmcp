@@ -341,7 +341,11 @@ class BluetoothMeshService {
         val data =
             AdvertiseData
                 .Builder()
-                .setIncludeDeviceName(true)
+                // Device name increases the advertisement size and can lead to
+                // ADVERTISE_FAILED_DATA_TOO_LARGE on some devices. The peer
+                // ID is already included via service data so we omit the name
+                // to keep the payload small.
+                .setIncludeDeviceName(false)
                 .setIncludeTxPowerLevel(false)
                 .addServiceUuid(ParcelUuid(serviceUuid))
                 .addServiceData(ParcelUuid(serviceUuid), myPeerId)
