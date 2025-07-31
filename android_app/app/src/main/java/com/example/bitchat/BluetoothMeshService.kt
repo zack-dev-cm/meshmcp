@@ -73,6 +73,7 @@ class BluetoothMeshService {
     }
 
     fun start() {
+        Log.d("BluetoothMeshService", "start() called")
         peers.clear()
         discovered.clear()
         _peersFlow.value = emptyList()
@@ -85,6 +86,7 @@ class BluetoothMeshService {
     }
 
     fun stop() {
+        Log.d("BluetoothMeshService", "stop() called")
         scanner?.stopScan(scanCallback)
         advertiser?.stopAdvertising(advertiseCallback)
         gattServer?.close()
@@ -112,6 +114,7 @@ class BluetoothMeshService {
         peerId: String,
         nickname: String? = null,
     ) {
+        Log.d("BluetoothMeshService", "Peer connected: $peerId")
         peers.add(peerId)
         _peersFlow.value = peers.toList()
         scope.launch {
@@ -133,11 +136,13 @@ class BluetoothMeshService {
     }
 
     fun onPeerDisconnected(peerId: String) {
+        Log.d("BluetoothMeshService", "Peer disconnected: $peerId")
         peers.remove(peerId)
         _peersFlow.value = peers.toList()
     }
 
     private fun startScanning() {
+        Log.d("BluetoothMeshService", "startScanning() called")
         val filter =
             ScanFilter
                 .Builder()
@@ -148,12 +153,15 @@ class BluetoothMeshService {
         if (started) {
             _scanning.value = true
             scanner?.startScan(listOf(filter), settings, scanCallback)
+            Log.d("BluetoothMeshService", "Scanning started")
         } else {
             _scanning.value = false
+            Log.w("BluetoothMeshService", "Scanner not available")
         }
     }
 
     private fun startGattServer() {
+        Log.d("BluetoothMeshService", "startGattServer() called")
         gattServer = bluetoothManager?.openGattServer(appContext, gattServerCallback)
         val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         val characteristic =
@@ -176,9 +184,11 @@ class BluetoothMeshService {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     connections[device] = null
                     onPeerConnected(device.address)
+                    Log.d("BluetoothMeshService", "GATT server connected: ${device.address}")
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     connections.remove(device)
                     onPeerDisconnected(device.address)
+                    Log.d("BluetoothMeshService", "GATT server disconnected: ${device.address}")
                 }
             }
 
@@ -230,11 +240,13 @@ class BluetoothMeshService {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     connections[gatt.device] = gatt
                     onPeerConnected(gatt.device.address)
+                    Log.d("BluetoothMeshService", "GATT client connected: ${gatt.device.address}")
                     gatt.discoverServices()
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     connections.remove(gatt.device)
                     onPeerDisconnected(gatt.device.address)
                     gatt.close()
+                    Log.d("BluetoothMeshService", "GATT client disconnected: ${gatt.device.address}")
                 }
             }
 
@@ -249,6 +261,7 @@ class BluetoothMeshService {
                         desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                         gatt.writeDescriptor(desc)
                     }
+                    Log.d("BluetoothMeshService", "Services discovered on ${gatt.device.address}")
                 }
             }
 
@@ -258,6 +271,7 @@ class BluetoothMeshService {
                 status: Int,
             ) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
+                    Log.d("BluetoothMeshService", "Write successful to ${gatt.device.address}")
                     val peerId = gatt.device.address
                     val queue = outgoingQueues[peerId]
                     val item = queue?.firstOrNull()
@@ -281,12 +295,14 @@ class BluetoothMeshService {
                 result: ScanResult?,
             ) {
                 val device = result?.device ?: return
+                Log.d("BluetoothMeshService", "Discovered device ${device.address}")
                 if (discovered.add(device.address)) {
                     _discoveredFlow.value = discovered.toList()
                 }
                 if (!connections.containsKey(device)) {
                     val gatt = device.connectGatt(appContext, false, gattClientCallback)
                     connections[device] = gatt
+                    Log.d("BluetoothMeshService", "Connecting to ${device.address}")
                 }
             }
 
@@ -297,6 +313,7 @@ class BluetoothMeshService {
         }
 
     private fun startAdvertising() {
+        Log.d("BluetoothMeshService", "startAdvertising() called")
         val settings =
             AdvertiseSettings
                 .Builder()
@@ -306,15 +323,20 @@ class BluetoothMeshService {
         val data =
             AdvertiseData
                 .Builder()
+                .setIncludeDeviceName(true)
+                .setIncludeTxPowerLevel(false)
                 .addServiceUuid(ParcelUuid(serviceUuid))
                 .addServiceData(ParcelUuid(serviceUuid), myPeerId)
                 .build()
         val adv = advertiser
+        bluetoothAdapter?.name = myPeerId.toHex()
         if (adv != null) {
             _advertising.value = true
             adv.startAdvertising(settings, data, advertiseCallback)
+            Log.d("BluetoothMeshService", "Advertising started as ${myPeerId.toHex()}")
         } else {
             _advertising.value = false
+            Log.w("BluetoothMeshService", "Advertiser not available")
         }
     }
 
@@ -322,10 +344,12 @@ class BluetoothMeshService {
         object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
                 _advertising.value = true
+                Log.d("BluetoothMeshService", "Advertising started successfully")
             }
 
             override fun onStartFailure(errorCode: Int) {
                 _advertising.value = false
+                Log.e("BluetoothMeshService", "Advertising failed: $errorCode")
             }
         }
 
