@@ -120,6 +120,7 @@ class MainActivity : ComponentActivity() {
 @Suppress("FunctionName")
 fun BitchatApp(service: BluetoothMeshService) {
     var selected by remember { mutableStateOf(0) }
+    var pendingPeer by remember { mutableStateOf<String?>(null) }
     val screens = listOf("Chat", "Broadcast", "Contacts")
     Scaffold(
         bottomBar = {
@@ -136,9 +137,13 @@ fun BitchatApp(service: BluetoothMeshService) {
         },
     ) { inner ->
         when (selected) {
-            0 -> PrivateChatScreen(service, Modifier.padding(inner))
+            0 -> PrivateChatScreen(service, Modifier.padding(inner), pendingPeer)
             1 -> PublicChatScreen(service, Modifier.padding(inner))
-            else -> ContactsScreen(service)
+            else -> ContactsScreen(service) { peerId ->
+                pendingPeer = peerId
+                service.connectToPeer(peerId)
+                selected = 0
+            }
         }
     }
 }
@@ -147,6 +152,7 @@ fun BitchatApp(service: BluetoothMeshService) {
 fun PrivateChatScreen(
     service: BluetoothMeshService,
     modifier: Modifier = Modifier,
+    initialTarget: String? = null,
 ) {
     var text by remember { mutableStateOf(TextFieldValue("")) }
     val messages by service.messages.collectAsState(initial = emptyList())
@@ -154,8 +160,11 @@ fun PrivateChatScreen(
     val discovered by service.discoveredPeersFlow.collectAsState(initial = emptyList())
     val scanning by service.scanningFlow.collectAsState(initial = false)
     val advertising by service.advertisingFlow.collectAsState(initial = false)
-    var target by remember { mutableStateOf<String?>(null) }
+    var target by remember { mutableStateOf<String?>(initialTarget) }
 
+    LaunchedEffect(initialTarget) {
+        initialTarget?.let { target = it }
+    }
     LaunchedEffect(peers) {
         if (target == null && peers.isNotEmpty()) target = peers.first()
     }
