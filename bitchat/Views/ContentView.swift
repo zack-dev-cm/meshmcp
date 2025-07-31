@@ -73,6 +73,7 @@ struct ContentView: View {
     @State private var lastScrollTime: Date = .distantPast
     @State private var scrollThrottleTimer: Timer?
     @State private var autocompleteDebounceTimer: Timer?
+    @State private var messageRecipient: String? = nil
     
     // MARK: - Computed Properties
     
@@ -470,12 +471,29 @@ struct ContentView: View {
             }
             
             HStack(alignment: .center, spacing: 4) {
+            Menu {
+                Button("all") {
+                    messageRecipient = nil
+                }
+                ForEach(viewModel.connectedPeers, id: \.self) { peerID in
+                    if let nick = viewModel.meshService.getPeerNicknames()[peerID] {
+                        Button("@\(nick)") {
+                            messageRecipient = peerID
+                        }
+                    }
+                }
+            } label: {
+                Text(messageRecipient.flatMap { viewModel.meshService.getPeerNicknames()[$0] } ?? "all")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(messageRecipient == nil ? secondaryTextColor : Color.orange)
+                    .padding(.leading, 12)
+            }
+
             TextField("type a message...", text: $messageText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14, design: .monospaced))
                 .foregroundColor(textColor)
                 .focused($isTextFieldFocused)
-                .padding(.leading, 12)
                 .autocorrectionDisabled(true)
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
@@ -564,7 +582,11 @@ struct ContentView: View {
     // MARK: - Actions
     
     private func sendMessage() {
-        viewModel.sendMessage(messageText)
+        if let peerID = messageRecipient {
+            viewModel.sendPrivateMessage(messageText, to: peerID)
+        } else {
+            viewModel.sendMessage(messageText)
+        }
         messageText = ""
     }
     
