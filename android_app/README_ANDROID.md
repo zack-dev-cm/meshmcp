@@ -32,6 +32,13 @@ The app requires several permissions at runtime:
 
 These permissions are requested on launch to start the mesh service automatically.
 
+### Advertising Size Limits
+
+Android restricts BLE advertisement packets to 31 bytes. The service truncates
+your nickname to seven characters before advertising to avoid exceeding this
+limit. If the system still reports `ADVERTISE_FAILED_DATA_TOO_LARGE`, the
+service retries once with a shorter name and logs the adjustment.
+
 ## Testing & Linting
 
 Run unit tests and Kotlin formatting checks:
