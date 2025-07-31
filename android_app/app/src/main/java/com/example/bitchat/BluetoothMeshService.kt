@@ -309,9 +309,10 @@ class BluetoothMeshService {
                 .addServiceUuid(ParcelUuid(serviceUuid))
                 .addServiceData(ParcelUuid(serviceUuid), myPeerId)
                 .build()
-        if (advertiser != null) {
+        val adv = advertiser
+        if (adv != null) {
             _advertising.value = true
-            advertiser.startAdvertising(settings, data, advertiseCallback)
+            adv.startAdvertising(settings, data, advertiseCallback)
         } else {
             _advertising.value = false
         }
