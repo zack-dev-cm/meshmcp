@@ -37,6 +37,10 @@ class BluetoothMeshService {
     private val discovered = mutableSetOf<String>()
     private val _discoveredFlow = MutableStateFlow<List<String>>(emptyList())
     val discoveredPeersFlow: StateFlow<List<String>> = _discoveredFlow
+    private val _scanning = MutableStateFlow(false)
+    val scanningFlow: StateFlow<Boolean> = _scanning
+    private val _advertising = MutableStateFlow(false)
+    val advertisingFlow: StateFlow<Boolean> = _advertising
     val messages: Flow<List<MessageEntity>> = repository.messages()
     val contacts: Flow<List<PeerEntity>> = repository.peers()
     private val identity = PeerIdentityManager
@@ -69,6 +73,8 @@ class BluetoothMeshService {
         discovered.clear()
         _peersFlow.value = emptyList()
         _discoveredFlow.value = emptyList()
+        _scanning.value = true
+        _advertising.value = true
         startGattServer()
         startScanning()
         startAdvertising()
@@ -85,6 +91,8 @@ class BluetoothMeshService {
         discovered.clear()
         _peersFlow.value = emptyList()
         _discoveredFlow.value = emptyList()
+        _scanning.value = false
+        _advertising.value = false
     }
 
     /**
@@ -132,7 +140,13 @@ class BluetoothMeshService {
                 .setServiceUuid(ParcelUuid(serviceUuid))
                 .build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        scanner?.startScan(listOf(filter), settings, scanCallback)
+        val started = scanner != null
+        if (started) {
+            _scanning.value = true
+            scanner?.startScan(listOf(filter), settings, scanCallback)
+        } else {
+            _scanning.value = false
+        }
     }
 
     private fun startGattServer() {
@@ -271,6 +285,11 @@ class BluetoothMeshService {
                     connections[device] = gatt
                 }
             }
+
+            override fun onScanFailed(errorCode: Int) {
+                _scanning.value = false
+                Log.e("BluetoothMeshService", "Scan failed: $errorCode")
+            }
         }
 
     private fun startAdvertising() {
@@ -286,17 +305,22 @@ class BluetoothMeshService {
                 .addServiceUuid(ParcelUuid(serviceUuid))
                 .addServiceData(ParcelUuid(serviceUuid), myPeerId)
                 .build()
-        advertiser?.startAdvertising(settings, data, advertiseCallback)
+        if (advertiser != null) {
+            _advertising.value = true
+            advertiser.startAdvertising(settings, data, advertiseCallback)
+        } else {
+            _advertising.value = false
+        }
     }
 
     private val advertiseCallback =
         object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                // Advertising started
+                _advertising.value = true
             }
 
             override fun onStartFailure(errorCode: Int) {
-                // handle failure
+                _advertising.value = false
             }
         }
 
@@ -317,7 +341,7 @@ class BluetoothMeshService {
         val packet =
             BitchatPacket(
                 type = MessageType.MESSAGE,
-                senderId = localPeerId,
+                senderId = myPeerId,
                 recipientId = macToBytes(peerId),
                 payload = text.toByteArray(),
             )
@@ -375,15 +399,6 @@ class BluetoothMeshService {
                 isFavorite = false,
                 delivered = peers.contains(peerId),
             )
-
-        // Prepare BLE packet with our current peer ID in the header
-        val packet =
-            BitchatPacket(
-                type = MessageType.MESSAGE,
-                senderId = myPeerId,
-                payload = message.toByteArray(),
-            )
-        val packetBytes = packet.toBytes() // TODO send packet over BLE
 
         scope.launch {
             repository.saveMessage(entity)
