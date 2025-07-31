@@ -224,6 +224,9 @@ class BluetoothMeshService {
                 val conn = connections.getOrPut(address) { PeerConnection() }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     conn.serverConnected = true
+                    if (conn.gatt == null) {
+                        conn.gatt = device.connectGatt(appContext, false, gattClientCallback)
+                    }
                     onPeerConnected(address)
                     Log.d("BluetoothMeshService", "GATT server connected: $address")
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
