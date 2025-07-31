@@ -25,6 +25,11 @@ class ChatRepository(
             messageDao.update(entity.copy(delivered = true, deliveryStatus = "sent"))
         }
 
+    suspend fun markDelivered(id: String) =
+        withContext(Dispatchers.IO) {
+            messageDao.markDelivered(id)
+        }
+
     suspend fun undeliveredForPeer(peerId: String) =
         withContext(Dispatchers.IO) {
             messageDao.undeliveredForPeer(peerId)

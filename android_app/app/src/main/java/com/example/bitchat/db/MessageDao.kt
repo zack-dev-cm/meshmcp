@@ -17,6 +17,9 @@ interface MessageDao {
     @Update
     suspend fun update(message: MessageEntity)
 
+    @Query("UPDATE messages SET delivered = 1, deliveryStatus = 'delivered' WHERE id = :id")
+    suspend fun markDelivered(id: String)
+
     @Query("DELETE FROM messages")
     suspend fun wipe()
 }
