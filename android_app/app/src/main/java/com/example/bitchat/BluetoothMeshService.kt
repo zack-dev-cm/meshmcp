@@ -390,9 +390,10 @@ class BluetoothMeshService {
                             "BluetoothMeshService",
                             "Connection to $address failed with status $status (attempt ${conn.connectionRetryCount}, delay ${delayMs}ms, count=$count)",
                         )
+                        val callback = this
                         scope.launch {
                             delay(delayMs)
-                            gatt.device.connectGatt(appContext, false, this@BluetoothMeshService.gattClientCallback)
+                            gatt.device.connectGatt(appContext, false, callback)
                         }
                     } else {
                         Log.e(
