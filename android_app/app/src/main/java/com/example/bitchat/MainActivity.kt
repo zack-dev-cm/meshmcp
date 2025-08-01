@@ -7,12 +7,14 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -24,8 +26,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.bitchat.db.MessageEntity
 
 class MainActivity : ComponentActivity() {
@@ -149,6 +153,25 @@ fun BitchatApp(service: BluetoothMeshService) {
 }
 
 @Composable
+fun LocationPermissionPrompt(onGranted: () -> Unit) {
+    val context = LocalContext.current
+    val granted =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+    val launcher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
+            if (allowed) onGranted()
+        }
+    if (!granted) {
+        Button(onClick = { launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }) {
+            Text("Grant location permission")
+        }
+    }
+}
+
+@Composable
 fun PrivateChatScreen(
     service: BluetoothMeshService,
     modifier: Modifier = Modifier,
@@ -190,6 +213,9 @@ fun PrivateChatScreen(
         }
         Text(if (scanning) "Discovering peers..." else "Discovery stopped")
         Text(if (advertising) "Advertising as ${service.myNickname}" else "Not advertising")
+        if (!scanning) {
+            LocationPermissionPrompt { service.start() }
+        }
         Spacer(Modifier.height(8.dp))
         if (discovered.isNotEmpty()) {
             Text("Available peers:")
@@ -251,6 +277,9 @@ fun PublicChatScreen(
         Text("Peers: " + peers.joinToString(", "))
         Text(if (scanning) "Discovering peers..." else "Discovery stopped")
         Text(if (advertising) "Advertising as ${service.myNickname}" else "Not advertising")
+        if (!scanning) {
+            LocationPermissionPrompt { service.start() }
+        }
         Spacer(Modifier.height(8.dp))
         if (discovered.isNotEmpty()) {
             Text("Available peers:")
