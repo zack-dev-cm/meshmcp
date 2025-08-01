@@ -31,6 +31,10 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.bitchat.db.MessageEntity
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val permissions: Array<String>
@@ -67,6 +71,37 @@ class MainActivity : ComponentActivity() {
                 val b = binder as MeshService.LocalBinder
                 meshService = b.getService()
                 bound = true
+                lifecycleScope.launch {
+                    repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        meshService?.bluetoothService?.missingRequirementsFlow?.collect { missing ->
+                            val perms = mutableListOf<String>()
+                            if (
+                                missing.contains(
+                                    BluetoothMeshService.ScanRequirement.FINE_LOCATION_PERMISSION,
+                                )
+                            ) {
+                                perms += Manifest.permission.ACCESS_FINE_LOCATION
+                            }
+                            if (
+                                missing.contains(
+                                    BluetoothMeshService.ScanRequirement.BLUETOOTH_SCAN_PERMISSION,
+                                )
+                            ) {
+                                perms += Manifest.permission.BLUETOOTH_SCAN
+                            }
+                            if (perms.isNotEmpty()) {
+                                permissionLauncher.launch(perms.toTypedArray())
+                            }
+                            if (
+                                missing.contains(
+                                    BluetoothMeshService.ScanRequirement.LOCATION_ENABLED,
+                                )
+                            ) {
+                                startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                            }
+                        }
+                    }
+                }
             }
 
             override fun onServiceDisconnected(name: ComponentName?) {

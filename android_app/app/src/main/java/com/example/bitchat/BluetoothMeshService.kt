@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.ParcelUuid
 import android.util.Log
+import android.location.LocationManager
 import androidx.core.content.ContextCompat
 import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
@@ -32,6 +33,12 @@ data class PeerConnection(
     var serverConnected: Boolean = false,
     var serviceDiscoveryStarted: Boolean = false,
 )
+
+enum class ScanRequirement {
+    FINE_LOCATION_PERMISSION,
+    BLUETOOTH_SCAN_PERMISSION,
+    LOCATION_ENABLED,
+}
 
 class BluetoothMeshService {
     private val serviceUuid = UUID.fromString("F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
@@ -60,6 +67,8 @@ class BluetoothMeshService {
     val discoveredPeersFlow: StateFlow<List<String>> = _discoveredFlow
     private val _scanning = MutableStateFlow(false)
     val scanningFlow: StateFlow<Boolean> = _scanning
+    private val _missingRequirements = MutableStateFlow<Set<ScanRequirement>>(emptySet())
+    val missingRequirementsFlow: StateFlow<Set<ScanRequirement>> = _missingRequirements
     private val _advertising = MutableStateFlow(false)
     val advertisingFlow: StateFlow<Boolean> = _advertising
     val messages: Flow<List<MessageEntity>> = repository.messages()
@@ -175,16 +184,30 @@ class BluetoothMeshService {
 
     private fun startScanning() {
         Log.d("BluetoothMeshService", "startScanning() called")
-        val granted =
+        val missing = mutableSetOf<ScanRequirement>()
+        val fineGranted =
             ContextCompat.checkSelfPermission(
                 appContext,
                 Manifest.permission.ACCESS_FINE_LOCATION,
             ) == PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            Log.w("BluetoothMeshService", "Location permission not granted; skipping scan")
+        if (!fineGranted) missing += ScanRequirement.FINE_LOCATION_PERMISSION
+        val scanGranted =
+            ContextCompat.checkSelfPermission(
+                appContext,
+                Manifest.permission.BLUETOOTH_SCAN,
+            ) == PackageManager.PERMISSION_GRANTED
+        if (!scanGranted) missing += ScanRequirement.BLUETOOTH_SCAN_PERMISSION
+        val locationEnabled =
+            (appContext.getSystemService(Context.LOCATION_SERVICE) as? LocationManager)
+                ?.isLocationEnabled ?: false
+        if (!locationEnabled) missing += ScanRequirement.LOCATION_ENABLED
+        if (missing.isNotEmpty()) {
+            Log.w("BluetoothMeshService", "Missing scan requirements: $missing")
             _scanning.value = false
+            _missingRequirements.value = missing
             return
         }
+        _missingRequirements.value = emptySet()
         discovered.clear()
         _discoveredFlow.value = emptyList()
         val filter =
