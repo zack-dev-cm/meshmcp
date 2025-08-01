@@ -1,4 +1,7 @@
-@file:Suppress("WildcardImport")
+@file:Suppress(
+    "ktlint:standard:no-wildcard-imports",
+    "ktlint:standard:backing-property-naming",
+)
 
 package com.example.bitchat
 
@@ -7,23 +10,23 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.ParcelUuid
 import android.util.Log
-import android.location.LocationManager
 import androidx.core.content.ContextCompat
+import com.example.bitchat.BasicMessage
+import com.example.bitchat.DeliveryAck
 import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
-import com.example.bitchat.BasicMessage
-import com.example.bitchat.DeliveryAck
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import java.util.*
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -60,12 +63,12 @@ class BluetoothMeshService {
     private val scope = CoroutineScope(Dispatchers.IO)
     private var scanRestartJob: kotlinx.coroutines.Job? = null
     private val scanRestartInterval = 15_000L
-    private val peers = mutableSetOf<String>()
+    private val peers = Collections.synchronizedSet(mutableSetOf<String>())
     private val _peersFlow = MutableStateFlow<List<String>>(emptyList())
     val peersFlow: StateFlow<List<String>> = _peersFlow
 
     private val discoveryRetentionMillis = 5 * 60 * 1000L
-    private val discovered = mutableMapOf<String, Long>()
+    private val discovered = ConcurrentHashMap<String, Long>()
     private val _discoveredFlow = MutableStateFlow<List<String>>(emptyList())
     val discoveredPeersFlow: StateFlow<List<String>> = _discoveredFlow
     private val _scanning = MutableStateFlow(false)
@@ -88,7 +91,7 @@ class BluetoothMeshService {
     private val bluetoothManager: BluetoothManager? =
         appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private var gattServer: BluetoothGattServer? = null
-    private val connections = mutableMapOf<String, PeerConnection>()
+    private val connections = ConcurrentHashMap<String, PeerConnection>()
     private val outgoingQueues = ConcurrentHashMap<String, MutableList<Pair<MessageEntity, ByteArray>>>()
     private val messageRetryCounts = ConcurrentHashMap<String, Int>()
     private val _writeFailureCounts = ConcurrentHashMap<Int, Int>()
@@ -120,10 +123,14 @@ class BluetoothMeshService {
 
     fun start() {
         Log.d("BluetoothMeshService", "start() called")
-        peers.clear()
-        discovered.clear()
-        _peersFlow.value = emptyList()
-        _discoveredFlow.value = emptyList()
+        synchronized(peers) {
+            peers.clear()
+            _peersFlow.value = emptyList()
+        }
+        synchronized(discovered) {
+            discovered.clear()
+            _discoveredFlow.value = emptyList()
+        }
         _scanning.value = true
         _advertising.value = false
         startGattServer()
@@ -138,12 +145,18 @@ class BluetoothMeshService {
         advertiser?.stopAdvertising(advertiseCallback)
         gattServer?.close()
         gattServer = null
-        connections.values.forEach { it.gatt?.close() }
-        connections.clear()
-        peers.clear()
-        discovered.clear()
-        _peersFlow.value = emptyList()
-        _discoveredFlow.value = emptyList()
+        synchronized(connections) {
+            connections.values.forEach { it.gatt?.close() }
+            connections.clear()
+        }
+        synchronized(peers) {
+            peers.clear()
+            _peersFlow.value = emptyList()
+        }
+        synchronized(discovered) {
+            discovered.clear()
+            _discoveredFlow.value = emptyList()
+        }
         _scanning.value = false
         _advertising.value = false
     }
@@ -162,13 +175,15 @@ class BluetoothMeshService {
         nickname: String? = null,
     ) {
         Log.d("BluetoothMeshService", "Peer connected: $peerId")
-        peers.add(peerId)
-        _peersFlow.value = peers.toList()
+        synchronized(peers) {
+            peers.add(peerId)
+            _peersFlow.value = peers.toList()
+        }
         scope.launch {
             val nick = nickname ?: repository.getPeerNickname(peerId) ?: NicknameGenerator.generate(peerId)
             repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
             val connection = connections[peerId]
-            val queue = outgoingQueues.getOrPut(peerId) { Collections.synchronizedList(mutableListOf()) }
+            val queue = outgoingQueues.computeIfAbsent(peerId) { Collections.synchronizedList(mutableListOf()) }
 
             val queued = repository.undeliveredForPeer(peerId)
             queued.forEach { msg ->
@@ -192,14 +207,11 @@ class BluetoothMeshService {
 
     fun onPeerDisconnected(peerId: String) {
         Log.d("BluetoothMeshService", "Peer disconnected: $peerId")
-        val conn = connections[peerId]
-        if (conn != null) {
-            if (!conn.serverConnected && conn.gatt == null) {
-                connections.remove(peerId)
-            }
+        connections.remove(peerId)
+        synchronized(peers) {
+            peers.remove(peerId)
+            _peersFlow.value = peers.toList()
         }
-        peers.remove(peerId)
-        _peersFlow.value = peers.toList()
     }
 
     private fun startScanning() {
@@ -229,8 +241,10 @@ class BluetoothMeshService {
         }
         _missingRequirements.value = emptySet()
         val now = System.currentTimeMillis()
-        discovered.entries.removeIf { (_, time) -> now - time > discoveryRetentionMillis }
-        _discoveredFlow.value = discovered.keys.toList()
+        synchronized(discovered) {
+            discovered.entries.removeIf { (_, time) -> now - time > discoveryRetentionMillis }
+            _discoveredFlow.value = discovered.keys.toList()
+        }
         val filter =
             ScanFilter
                 .Builder()
@@ -243,16 +257,17 @@ class BluetoothMeshService {
             scanner?.startScan(listOf(filter), settings, scanCallback)
             Log.d("BluetoothMeshService", "Scanning started")
             scanRestartJob?.cancel()
-            scanRestartJob = scope.launch {
-                while (_scanning.value) {
-                    delay(scanRestartInterval)
-                    scanner?.let {
-                        Log.d("BluetoothMeshService", "Restarting scan")
-                        it.stopScan(scanCallback)
-                        it.startScan(listOf(filter), settings, scanCallback)
+            scanRestartJob =
+                scope.launch {
+                    while (_scanning.value) {
+                        delay(scanRestartInterval)
+                        scanner?.let {
+                            Log.d("BluetoothMeshService", "Restarting scan")
+                            it.stopScan(scanCallback)
+                            it.startScan(listOf(filter), settings, scanCallback)
+                        }
                     }
                 }
-            }
         } else {
             _scanning.value = false
             Log.w("BluetoothMeshService", "Scanner not available")
@@ -281,7 +296,7 @@ class BluetoothMeshService {
                 newState: Int,
             ) {
                 val address = device.address
-                val conn = connections.getOrPut(address) { PeerConnection() }
+                val conn = connections.computeIfAbsent(address) { PeerConnection() }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     conn.serverConnected = true
                     if (conn.gatt == null) {
@@ -318,8 +333,9 @@ class BluetoothMeshService {
                     val messageId = msg?.id ?: UUID.randomUUID().toString()
                     val peerId = device.address
                     scope.launch {
-                        val nick = repository.getPeerNickname(peerId)
-                            ?: NicknameGenerator.generate(peerId)
+                        val nick =
+                            repository.getPeerNickname(peerId)
+                                ?: NicknameGenerator.generate(peerId)
                         val entity =
                             MessageEntity(
                                 id = messageId,
@@ -340,18 +356,20 @@ class BluetoothMeshService {
                         repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
                         repository.saveMessage(entity)
 
-                        val ack = DeliveryAck(
-                            originalMessageId = messageId,
-                            recipientId = myPeerId.toHex(),
-                            recipientNickname = myNickname,
-                            hopCount = 0,
-                        )
-                        val ackPacket = BitchatPacket(
-                            type = MessageType.DELIVERY_ACK,
-                            senderId = myPeerId,
-                            recipientId = macToBytes(peerId),
-                            payload = ack.toBytes(),
-                        )
+                        val ack =
+                            DeliveryAck(
+                                originalMessageId = messageId,
+                                recipientId = myPeerId.toHex(),
+                                recipientNickname = myNickname,
+                                hopCount = 0,
+                            )
+                        val ackPacket =
+                            BitchatPacket(
+                                type = MessageType.DELIVERY_ACK,
+                                senderId = myPeerId,
+                                recipientId = macToBytes(peerId),
+                                payload = ack.toBytes(),
+                            )
                         val ackBytes = ackPacket.toBytes()
                         val char = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
                         char?.value = ackBytes
@@ -374,7 +392,7 @@ class BluetoothMeshService {
                 newState: Int,
             ) {
                 val address = gatt.device.address
-                val conn = connections.getOrPut(address) { PeerConnection() }
+                val conn = connections.computeIfAbsent(address) { PeerConnection() }
                 if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
                     conn.gatt = null
                     conn.serviceDiscoveryStarted = false
@@ -382,10 +400,11 @@ class BluetoothMeshService {
                     val count = _connectionFailureCounts.merge(status, 1, Int::plus) ?: 1
                     conn.connectionRetryCount += 1
                     if (conn.connectionRetryCount < maxConnectionRetries) {
-                        val delayMs = min(
-                            connectionRetryBaseDelay * (1L shl (conn.connectionRetryCount - 1)),
-                            connectionRetryMaxDelay,
-                        )
+                        val delayMs =
+                            min(
+                                connectionRetryBaseDelay * (1L shl (conn.connectionRetryCount - 1)),
+                                connectionRetryMaxDelay,
+                            )
                         Log.w(
                             "BluetoothMeshService",
                             "Connection to $address failed with status $status (attempt ${conn.connectionRetryCount}, delay ${delayMs}ms, count=$count)",
@@ -433,7 +452,7 @@ class BluetoothMeshService {
                     }
                     Log.d(
                         "BluetoothMeshService",
-                        "Services discovered on ${gatt.device.address}"
+                        "Services discovered on ${gatt.device.address}",
                     )
 
                     val peerId = gatt.device.address
@@ -491,10 +510,11 @@ class BluetoothMeshService {
                                 val msgId = item.first.id
                                 val attempts = messageRetryCounts.getOrDefault(msgId, 0) + 1
                                 messageRetryCounts[msgId] = attempts
-                                val delayMs = min(
-                                    writeRetryBaseDelay * (1L shl (attempts - 1)),
-                                    writeRetryMaxDelay,
-                                )
+                                val delayMs =
+                                    min(
+                                        writeRetryBaseDelay * (1L shl (attempts - 1)),
+                                        writeRetryMaxDelay,
+                                    )
                                 Log.w(
                                     "BluetoothMeshService",
                                     "Write failed to ${gatt.device.address} with status $status (attempt $attempts, delay ${delayMs}ms, count=$count)",
@@ -519,7 +539,7 @@ class BluetoothMeshService {
                 if (packet == null) {
                     Log.w(
                         "BluetoothMeshService",
-                        "Failed to parse packet from $peerId"
+                        "Failed to parse packet from $peerId",
                     )
                     return
                 }
@@ -530,8 +550,9 @@ class BluetoothMeshService {
                         val text = msg?.text ?: packet.payload.toString(Charsets.UTF_8)
                         val messageId = msg?.id ?: UUID.randomUUID().toString()
                         scope.launch {
-                            val nick = repository.getPeerNickname(peerId)
-                                ?: NicknameGenerator.generate(peerId)
+                            val nick =
+                                repository.getPeerNickname(peerId)
+                                    ?: NicknameGenerator.generate(peerId)
                             val entity =
                                 MessageEntity(
                                     id = messageId,
@@ -550,7 +571,7 @@ class BluetoothMeshService {
                                 )
                             Log.d(
                                 "BluetoothMeshService",
-                                "Received message from $peerId: $text"
+                                "Received message from $peerId: $text",
                             )
                             repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
                             repository.saveMessage(entity)
@@ -562,7 +583,7 @@ class BluetoothMeshService {
                         ack?.let {
                             Log.d(
                                 "BluetoothMeshService",
-                                "Delivery ACK from $peerId for ${it.originalMessageId}"
+                                "Delivery ACK from $peerId for ${it.originalMessageId}",
                             )
                             scope.launch { repository.markDelivered(it.originalMessageId) }
                         }
@@ -581,21 +602,27 @@ class BluetoothMeshService {
             ) {
                 val device = result?.device ?: return
                 val now = System.currentTimeMillis()
-                val lastSeen = discovered[device.address]
-                if (lastSeen == null || now - lastSeen > discoveryRetentionMillis) {
+                var newlyDiscovered = false
+                synchronized(discovered) {
+                    val lastSeen = discovered[device.address]
+                    if (lastSeen == null || now - lastSeen > discoveryRetentionMillis) {
+                        newlyDiscovered = true
+                        discovered[device.address] = now
+                        _discoveredFlow.value = discovered.keys.toList()
+                    } else {
+                        discovered[device.address] = now
+                    }
+                }
+                if (newlyDiscovered) {
                     Log.d(
                         "BluetoothMeshService",
                         "Discovered device ${device.address}",
                     )
-                    discovered[device.address] = now
-                    _discoveredFlow.value = discovered.keys.toList()
-                } else {
-                    discovered[device.address] = now
                 }
                 val conn = connections[device.address]
                 if (conn?.gatt == null) {
                     val gatt = device.connectGatt(appContext, false, gattClientCallback)
-                    connections.getOrPut(device.address) { PeerConnection() }.gatt = gatt
+                    connections.computeIfAbsent(device.address) { PeerConnection() }.gatt = gatt
                     Log.d("BluetoothMeshService", "Connecting to ${device.address}")
                 }
             }
@@ -640,7 +667,6 @@ class BluetoothMeshService {
         }
     }
 
-
     private val advertiseCallback =
         object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
@@ -650,17 +676,18 @@ class BluetoothMeshService {
 
             override fun onStartFailure(errorCode: Int) {
                 _advertising.value = false
-                val reason = when (errorCode) {
-                    AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE -> "DATA_TOO_LARGE"
-                    AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "TOO_MANY_ADVERTISERS"
-                    AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> "ALREADY_STARTED"
-                    AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> "INTERNAL_ERROR"
-                    AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "UNSUPPORTED"
-                    else -> "UNKNOWN"
-                }
+                val reason =
+                    when (errorCode) {
+                        AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE -> "DATA_TOO_LARGE"
+                        AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "TOO_MANY_ADVERTISERS"
+                        AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> "ALREADY_STARTED"
+                        AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> "INTERNAL_ERROR"
+                        AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "UNSUPPORTED"
+                        else -> "UNKNOWN"
+                    }
                 Log.e(
                     "BluetoothMeshService",
-                    "Advertising failed: $errorCode ($reason)"
+                    "Advertising failed: $errorCode ($reason)",
                 )
                 advertiser?.stopAdvertising(this)
                 if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE && !advertiseRetryAttempted) {
@@ -669,13 +696,12 @@ class BluetoothMeshService {
                     val shorter = myNickname.take(advertiseNameLength)
                     Log.w(
                         "BluetoothMeshService",
-                        "Retrying advertising with shorter name: $shorter"
+                        "Retrying advertising with shorter name: $shorter",
                     )
                     startAdvertising()
                 }
             }
         }
-
 
     private fun macToBytes(mac: String): ByteArray {
         val parts = mac.split(":")
@@ -713,7 +739,7 @@ class BluetoothMeshService {
         bytes: ByteArray,
     ) {
         Log.d("BluetoothMeshService", "Attempting write to $peerId for ${entity.id}")
-        val queue = outgoingQueues.getOrPut(peerId) { Collections.synchronizedList(mutableListOf()) }
+        val queue = outgoingQueues.computeIfAbsent(peerId) { Collections.synchronizedList(mutableListOf()) }
         val connection = connections[peerId]
 
         if (connection?.serviceDiscoveryStarted != true) {
@@ -795,7 +821,7 @@ class BluetoothMeshService {
             if (peers.contains(peerId)) {
                 writeOrQueue(peerId, entity, bytes)
             } else {
-                val queue = outgoingQueues.getOrPut(peerId) { Collections.synchronizedList(mutableListOf()) }
+                val queue = outgoingQueues.computeIfAbsent(peerId) { Collections.synchronizedList(mutableListOf()) }
                 synchronized(queue) { queue.add(entity to bytes) }
             }
         }
@@ -821,10 +847,12 @@ class BluetoothMeshService {
 
         scope.launch {
             repository.saveMessage(entity)
-            peers.forEach { peer ->
-                val msg = BasicMessage(entity.id, message)
-                val bytes = createPacket(peer, msg)
-                writeOrQueue(peer, entity, bytes)
+            synchronized(peers) {
+                peers.forEach { peer ->
+                    val msg = BasicMessage(entity.id, message)
+                    val bytes = createPacket(peer, msg)
+                    writeOrQueue(peer, entity, bytes)
+                }
             }
         }
     }
@@ -839,11 +867,11 @@ class BluetoothMeshService {
         if (conn?.gatt == null) {
             Log.d("BluetoothMeshService", "Attempting connection to $address")
             val gatt = device.connectGatt(appContext, false, gattClientCallback)
-            connections.getOrPut(address) { PeerConnection() }.gatt = gatt
+            connections.computeIfAbsent(address) { PeerConnection() }.gatt = gatt
         }
     }
 
-    fun connectedPeers(): List<String> = peers.toList()
+    fun connectedPeers(): List<String> = synchronized(peers) { peers.toList() }
 
     fun wipeAllData() {
         scope.launch { repository.wipeAll() }
