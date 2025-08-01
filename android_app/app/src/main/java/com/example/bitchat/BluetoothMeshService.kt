@@ -414,60 +414,12 @@ class BluetoothMeshService {
                 if (responseNeeded) {
                     gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                 }
-                val packet = BitchatPacket.from(value)
-                if (packet?.type == MessageType.MESSAGE) {
-                    val msg = BasicMessage.from(packet.payload)
-                    val text = msg?.text ?: packet.payload.toString(Charsets.UTF_8)
-                    val messageId = msg?.id ?: UUID.randomUUID().toString()
-                    val peerId = device.address
-                    scope.launch {
-                        val nick =
-                            repository.getPeerNickname(peerId)
-                                ?: NicknameGenerator.generate(peerId)
-                        val entity =
-                            MessageEntity(
-                                id = messageId,
-                                sender = nick,
-                                content = text,
-                                timestamp = msg?.timestamp ?: packet.timestamp,
-                                isRelay = false,
-                                originalSender = null,
-                                isPrivate = packet.recipientId != null,
-                                recipientNickname = null,
-                                senderPeerId = peerId,
-                                deliveryStatus = "received",
-                                retryCount = 0,
-                                isFavorite = false,
-                                delivered = true,
-                            )
-                        Log.d("BluetoothMeshService", "Received message from $peerId: $text")
-                        repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
-                        repository.saveMessage(entity)
-
-                        val ack =
-                            DeliveryAck(
-                                originalMessageId = messageId,
-                                recipientId = myPeerId.toHex(),
-                                recipientNickname = myNickname,
-                                hopCount = 0,
-                            )
-                        val ackPacket =
-                            BitchatPacket(
-                                type = MessageType.DELIVERY_ACK,
-                                senderId = myPeerId,
-                                recipientId = macToBytes(peerId),
-                                payload = ack.toBytes(),
-                            )
-                        val ackBytes = ackPacket.toBytes()
-                        val char = gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
-                        char?.value = ackBytes
-                        gattServer?.notifyCharacteristicChanged(device, char, false)
-                    }
-                } else if (packet?.type == MessageType.DELIVERY_ACK) {
-                    val ack = DeliveryAck.from(packet.payload)
-                    ack?.let {
-                        scope.launch { repository.markDelivered(it.originalMessageId) }
-                    }
+                val ackBytes = handleIncomingData(device.address, value)
+                ackBytes?.let { bytes ->
+                    val char =
+                        gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                    char?.value = bytes
+                    gattServer?.notifyCharacteristicChanged(device, char, false)
                 }
             }
         }
@@ -645,65 +597,89 @@ class BluetoothMeshService {
                 characteristic: BluetoothGattCharacteristic,
             ) {
                 connections[gatt.device.address]?.lastActivity = System.currentTimeMillis()
-                val packet = BitchatPacket.from(characteristic.value)
                 val peerId = gatt.device.address
-                if (packet == null) {
-                    Log.w(
-                        "BluetoothMeshService",
-                        "Failed to parse packet from $peerId",
-                    )
-                    return
-                }
-
-                when (packet.type) {
-                    MessageType.MESSAGE -> {
-                        val msg = BasicMessage.from(packet.payload)
-                        val text = msg?.text ?: packet.payload.toString(Charsets.UTF_8)
-                        val messageId = msg?.id ?: UUID.randomUUID().toString()
-                        scope.launch {
-                            val nick =
-                                repository.getPeerNickname(peerId)
-                                    ?: NicknameGenerator.generate(peerId)
-                            val entity =
-                                MessageEntity(
-                                    id = messageId,
-                                    sender = nick,
-                                    content = text,
-                                    timestamp = msg?.timestamp ?: packet.timestamp,
-                                    isRelay = false,
-                                    originalSender = null,
-                                    isPrivate = packet.recipientId != null,
-                                    recipientNickname = null,
-                                    senderPeerId = peerId,
-                                    deliveryStatus = "received",
-                                    retryCount = 0,
-                                    isFavorite = false,
-                                    delivered = true,
-                                )
-                            Log.d(
-                                "BluetoothMeshService",
-                                "Received message from $peerId: $text",
-                            )
-                            repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
-                            repository.saveMessage(entity)
-                        }
+                val ackBytes = handleIncomingData(peerId, characteristic.value)
+                ackBytes?.let { bytes ->
+                    val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                    char?.let { c ->
+                        c.value = bytes
+                        gatt.writeCharacteristic(c)
                     }
-
-                    MessageType.DELIVERY_ACK -> {
-                        val ack = DeliveryAck.from(packet.payload)
-                        ack?.let {
-                            Log.d(
-                                "BluetoothMeshService",
-                                "Delivery ACK from $peerId for ${it.originalMessageId}",
-                            )
-                            scope.launch { repository.markDelivered(it.originalMessageId) }
-                        }
-                    }
-
-                    else -> Unit
                 }
             }
         }
+
+    private fun handleIncomingData(peerId: String, value: ByteArray): ByteArray? {
+        val packet = BitchatPacket.from(value)
+        if (packet == null) {
+            Log.w(
+                "BluetoothMeshService",
+                "Failed to parse packet from $peerId",
+            )
+            return null
+        }
+
+        return when (packet.type) {
+            MessageType.MESSAGE -> {
+                val msg = BasicMessage.from(packet.payload)
+                val text = msg?.text ?: packet.payload.toString(Charsets.UTF_8)
+                val messageId = msg?.id ?: UUID.randomUUID().toString()
+                scope.launch {
+                    val nick =
+                        repository.getPeerNickname(peerId)
+                            ?: NicknameGenerator.generate(peerId)
+                    val entity =
+                        MessageEntity(
+                            id = messageId,
+                            sender = nick,
+                            content = text,
+                            timestamp = msg?.timestamp ?: packet.timestamp,
+                            isRelay = false,
+                            originalSender = null,
+                            isPrivate = packet.recipientId != null,
+                            recipientNickname = null,
+                            senderPeerId = peerId,
+                            deliveryStatus = "received",
+                            retryCount = 0,
+                            isFavorite = false,
+                            delivered = true,
+                        )
+                    Log.d("BluetoothMeshService", "Received message from $peerId: $text")
+                    repository.savePeer(PeerEntity(peerId, nick, System.currentTimeMillis()))
+                    repository.saveMessage(entity)
+                }
+                val ack =
+                    DeliveryAck(
+                        originalMessageId = messageId,
+                        recipientId = myPeerId.toHex(),
+                        recipientNickname = myNickname,
+                        hopCount = 0,
+                    )
+                val ackPacket =
+                    BitchatPacket(
+                        type = MessageType.DELIVERY_ACK,
+                        senderId = myPeerId,
+                        recipientId = macToBytes(peerId),
+                        payload = ack.toBytes(),
+                    )
+                ackPacket.toBytes()
+            }
+
+            MessageType.DELIVERY_ACK -> {
+                val ack = DeliveryAck.from(packet.payload)
+                ack?.let {
+                    Log.d(
+                        "BluetoothMeshService",
+                        "Delivery ACK from $peerId for ${it.originalMessageId}",
+                    )
+                    scope.launch { repository.markDelivered(it.originalMessageId) }
+                }
+                null
+            }
+
+            else -> null
+        }
+    }
 
     private val scanCallback =
         object : ScanCallback() {
