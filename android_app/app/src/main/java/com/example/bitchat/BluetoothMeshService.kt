@@ -2,11 +2,14 @@
 
 package com.example.bitchat
 
+import android.Manifest
 import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.ParcelUuid
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.example.bitchat.db.ChatRepository
 import com.example.bitchat.db.MessageEntity
 import com.example.bitchat.db.PeerEntity
@@ -172,6 +175,16 @@ class BluetoothMeshService {
 
     private fun startScanning() {
         Log.d("BluetoothMeshService", "startScanning() called")
+        val granted =
+            ContextCompat.checkSelfPermission(
+                appContext,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            Log.w("BluetoothMeshService", "Location permission not granted; skipping scan")
+            _scanning.value = false
+            return
+        }
         discovered.clear()
         _discoveredFlow.value = emptyList()
         val filter =
