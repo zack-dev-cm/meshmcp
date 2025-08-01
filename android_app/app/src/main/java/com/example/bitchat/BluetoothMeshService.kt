@@ -880,10 +880,20 @@ class BluetoothMeshService {
                 synchronized(queue) { queue.add(entity to bytes) }
             } else {
                 synchronized(queue) { queue.add(entity to bytes) }
-                Log.w(
+                Log.d(
                     "BluetoothMeshService",
-                    "gatt.writeCharacteristic returned false for $peerId",
+                    "gatt.writeCharacteristic returned false for $peerId; will retry from queue",
                 )
+                scope.launch {
+                    delay(100)
+                    synchronized(queue) {
+                        val next = queue.firstOrNull()
+                        if (next != null) {
+                            char.value = next.second
+                            gatt.writeCharacteristic(char)
+                        }
+                    }
+                }
             }
             return
         }
