@@ -77,14 +77,14 @@ class MainActivity : ComponentActivity() {
                             val perms = mutableListOf<String>()
                             if (
                                 missing.contains(
-                                    BluetoothMeshService.ScanRequirement.FINE_LOCATION_PERMISSION,
+                                    ScanRequirement.FINE_LOCATION_PERMISSION,
                                 )
                             ) {
                                 perms += Manifest.permission.ACCESS_FINE_LOCATION
                             }
                             if (
                                 missing.contains(
-                                    BluetoothMeshService.ScanRequirement.BLUETOOTH_SCAN_PERMISSION,
+                                    ScanRequirement.BLUETOOTH_SCAN_PERMISSION,
                                 )
                             ) {
                                 perms += Manifest.permission.BLUETOOTH_SCAN
@@ -94,7 +94,7 @@ class MainActivity : ComponentActivity() {
                             }
                             if (
                                 missing.contains(
-                                    BluetoothMeshService.ScanRequirement.LOCATION_ENABLED,
+                                    ScanRequirement.LOCATION_ENABLED,
                                 )
                             ) {
                                 startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
