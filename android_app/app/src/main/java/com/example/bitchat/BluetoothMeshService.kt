@@ -27,11 +27,13 @@ import kotlinx.coroutines.delay
 import java.util.*
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.min
 
 data class PeerConnection(
     var gatt: BluetoothGatt? = null,
     var serverConnected: Boolean = false,
     var serviceDiscoveryStarted: Boolean = false,
+    var connectionRetryCount: Int = 0,
 )
 
 enum class ScanRequirement {
@@ -88,6 +90,17 @@ class BluetoothMeshService {
     private var gattServer: BluetoothGattServer? = null
     private val connections = mutableMapOf<String, PeerConnection>()
     private val outgoingQueues = ConcurrentHashMap<String, MutableList<Pair<MessageEntity, ByteArray>>>()
+    private val messageRetryCounts = ConcurrentHashMap<String, Int>()
+    private val _writeFailureCounts = ConcurrentHashMap<Int, Int>()
+    val writeFailureCounts: Map<Int, Int> get() = _writeFailureCounts
+    private val _connectionFailureCounts = ConcurrentHashMap<Int, Int>()
+    val connectionFailureCounts: Map<Int, Int> get() = _connectionFailureCounts
+
+    private var writeRetryBaseDelay = 500L
+    private var writeRetryMaxDelay = 5_000L
+    private var connectionRetryBaseDelay = 1_000L
+    private var connectionRetryMaxDelay = 16_000L
+    private var maxConnectionRetries = 5
 
     private var advertiseNameLength = 7
     private var advertiseRetryAttempted = false
@@ -362,22 +375,46 @@ class BluetoothMeshService {
             ) {
                 val address = gatt.device.address
                 val conn = connections.getOrPut(address) { PeerConnection() }
+                if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    conn.gatt = null
+                    conn.serviceDiscoveryStarted = false
+                    gatt.close()
+                    val count = _connectionFailureCounts.merge(status, 1, Int::plus) ?: 1
+                    conn.connectionRetryCount += 1
+                    if (conn.connectionRetryCount < maxConnectionRetries) {
+                        val delayMs = min(
+                            connectionRetryBaseDelay * (1L shl (conn.connectionRetryCount - 1)),
+                            connectionRetryMaxDelay,
+                        )
+                        Log.w(
+                            "BluetoothMeshService",
+                            "Connection to $address failed with status $status (attempt ${conn.connectionRetryCount}, delay ${delayMs}ms, count=$count)",
+                        )
+                        scope.launch {
+                            delay(delayMs)
+                            gatt.device.connectGatt(appContext, false, this@BluetoothMeshService.gattClientCallback)
+                        }
+                    } else {
+                        Log.e(
+                            "BluetoothMeshService",
+                            "Connection to $address failed after ${conn.connectionRetryCount} attempts with status $status",
+                        )
+                        onPeerDisconnected(address)
+                        outgoingQueues.remove(address)
+                        connections.remove(address)
+                        conn.connectionRetryCount = 0
+                    }
+                    return
+                }
+
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    conn.connectionRetryCount = 0
                     conn.gatt = gatt
                     conn.serviceDiscoveryStarted = false
                     onPeerConnected(address)
                     Log.d("BluetoothMeshService", "GATT client connected: $address")
                     gatt.discoverServices()
                     conn.serviceDiscoveryStarted = true
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    conn.gatt = null
-                    conn.serviceDiscoveryStarted = false
-                    gatt.close()
-                    onPeerDisconnected(address)
-                    if (!conn.serverConnected) {
-                        connections.remove(address)
-                    }
-                    Log.d("BluetoothMeshService", "GATT client disconnected: $address")
                 }
             }
 
@@ -430,6 +467,7 @@ class BluetoothMeshService {
                             val item = q.firstOrNull()
                             if (item != null) {
                                 q.removeAt(0)
+                                messageRetryCounts.remove(item.first.id)
                                 scope.launch { repository.markDelivered(item.first) }
                                 if (q.isNotEmpty()) {
                                     val next = q.first()
@@ -440,10 +478,7 @@ class BluetoothMeshService {
                         }
                     }
                 } else {
-                    Log.w(
-                        "BluetoothMeshService",
-                        "Write failed to ${gatt.device.address} with status $status",
-                    )
+                    val count = _writeFailureCounts.merge(status, 1, Int::plus) ?: 1
                     val peerId = gatt.device.address
                     val queue = outgoingQueues[peerId]
                     queue?.let { q ->
@@ -452,8 +487,19 @@ class BluetoothMeshService {
                             if (item != null) {
                                 q.removeAt(0)
                                 q.add(0, item)
+                                val msgId = item.first.id
+                                val attempts = messageRetryCounts.getOrDefault(msgId, 0) + 1
+                                messageRetryCounts[msgId] = attempts
+                                val delayMs = min(
+                                    writeRetryBaseDelay * (1L shl (attempts - 1)),
+                                    writeRetryMaxDelay,
+                                )
+                                Log.w(
+                                    "BluetoothMeshService",
+                                    "Write failed to ${gatt.device.address} with status $status (attempt $attempts, delay ${delayMs}ms, count=$count)",
+                                )
                                 scope.launch {
-                                    delay(500)
+                                    delay(delayMs)
                                     characteristic.value = item.second
                                     gatt.writeCharacteristic(characteristic)
                                 }
