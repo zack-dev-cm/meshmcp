@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
 data class PeerConnection(
     var gatt: BluetoothGatt? = null,
     var serverConnected: Boolean = false,
+    var serviceDiscoveryStarted: Boolean = false,
 )
 
 class BluetoothMeshService {
@@ -319,11 +320,14 @@ class BluetoothMeshService {
                 val conn = connections.getOrPut(address) { PeerConnection() }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     conn.gatt = gatt
+                    conn.serviceDiscoveryStarted = false
                     onPeerConnected(address)
                     Log.d("BluetoothMeshService", "GATT client connected: $address")
                     gatt.discoverServices()
+                    conn.serviceDiscoveryStarted = true
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     conn.gatt = null
+                    conn.serviceDiscoveryStarted = false
                     gatt.close()
                     onPeerDisconnected(address)
                     if (!conn.serverConnected) {
@@ -588,6 +592,14 @@ class BluetoothMeshService {
                 }
             } else {
                 Log.w("BluetoothMeshService", "Characteristic null for $peerId")
+                if (!connection.serviceDiscoveryStarted) {
+                    Log.d(
+                        "BluetoothMeshService",
+                        "Service discovery triggered for $peerId due to missing characteristic",
+                    )
+                    gatt.discoverServices()
+                    connection.serviceDiscoveryStarted = true
+                }
             }
         } ?: run {
             if (connection?.serverConnected == true && serverCharacteristic != null) {
