@@ -333,7 +333,7 @@ class BluetoothMeshService {
         val descriptor =
             BluetoothGattDescriptor(
                 UUID.fromString(
-                    BluetoothGattDescriptor.CLIENT_CHARACTERISTIC_CONFIGURATION_UUID.toString(),
+                    characteristicUuid.toString(),
                 ),
                 BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE,
             )
@@ -391,7 +391,7 @@ class BluetoothMeshService {
                 }
                 if (
                     descriptor.uuid ==
-                        BluetoothGattDescriptor.CLIENT_CHARACTERISTIC_CONFIGURATION_UUID &&
+                    characteristicUuid &&
                         value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                 ) {
                     Log.d(
@@ -570,7 +570,7 @@ class BluetoothMeshService {
             ) {
                 if (
                     descriptor.uuid ==
-                        BluetoothGattDescriptor.CLIENT_CHARACTERISTIC_CONFIGURATION_UUID &&
+                    characteristicUuid &&
                         descriptor.value.contentEquals(
                             BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE,
                         )
