@@ -392,14 +392,17 @@ class BluetoothMeshService {
 
                     val peerId = gatt.device.address
                     outgoingQueues[peerId]?.let { queue ->
-                        val item = synchronized(queue) { queue.firstOrNull() }
-                        if (item != null) {
-                            Log.d(
-                                "BluetoothMeshService",
-                                "Flushing queued messages for $peerId after services discovered"
-                            )
-                            characteristic.value = item.second
-                            gatt.writeCharacteristic(characteristic)
+                        synchronized(queue) {
+                            if (queue.isNotEmpty()) {
+                                Log.d(
+                                    "BluetoothMeshService",
+                                    "Flushing queued messages for $peerId after services discovered",
+                                )
+                                queue.forEach { (_, data) ->
+                                    characteristic.value = data
+                                    gatt.writeCharacteristic(characteristic)
+                                }
+                            }
                         }
                     }
                 }
@@ -423,6 +426,27 @@ class BluetoothMeshService {
                                 if (q.isNotEmpty()) {
                                     val next = q.first()
                                     characteristic.value = next.second
+                                    gatt.writeCharacteristic(characteristic)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Log.w(
+                        "BluetoothMeshService",
+                        "Write failed to ${gatt.device.address} with status $status",
+                    )
+                    val peerId = gatt.device.address
+                    val queue = outgoingQueues[peerId]
+                    queue?.let { q ->
+                        synchronized(q) {
+                            val item = q.firstOrNull()
+                            if (item != null) {
+                                q.removeAt(0)
+                                q.add(0, item)
+                                scope.launch {
+                                    delay(500)
+                                    characteristic.value = item.second
                                     gatt.writeCharacteristic(characteristic)
                                 }
                             }
@@ -628,14 +652,6 @@ class BluetoothMeshService {
                 }
             } else {
                 Log.w("BluetoothMeshService", "Characteristic null for $peerId")
-                if (!connection.serviceDiscoveryStarted) {
-                    Log.d(
-                        "BluetoothMeshService",
-                        "Service discovery triggered for $peerId due to missing characteristic",
-                    )
-                    gatt.discoverServices()
-                    connection.serviceDiscoveryStarted = true
-                }
             }
         } ?: run {
             if (connection?.serverConnected == true && serverCharacteristic != null) {
