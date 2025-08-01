@@ -269,6 +269,14 @@ class BluetoothMeshService {
                 BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
                 BluetoothGattCharacteristic.PERMISSION_WRITE,
             )
+        val descriptor =
+            BluetoothGattDescriptor(
+                UUID.fromString(
+                    BluetoothGattDescriptor.CLIENT_CHARACTERISTIC_CONFIGURATION_UUID.toString(),
+                ),
+                BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE,
+            )
+        characteristic.addDescriptor(descriptor)
         service.addCharacteristic(characteristic)
         gattServer?.addService(service)
     }
@@ -296,6 +304,36 @@ class BluetoothMeshService {
                         connections.remove(address)
                     }
                     Log.d("BluetoothMeshService", "GATT server disconnected: $address")
+                }
+            }
+
+            override fun onDescriptorWriteRequest(
+                device: BluetoothDevice,
+                requestId: Int,
+                descriptor: BluetoothGattDescriptor,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray,
+            ) {
+                if (responseNeeded) {
+                    gattServer?.sendResponse(
+                        device,
+                        requestId,
+                        BluetoothGatt.GATT_SUCCESS,
+                        offset,
+                        value,
+                    )
+                }
+                if (
+                    descriptor.uuid ==
+                        BluetoothGattDescriptor.CLIENT_CHARACTERISTIC_CONFIGURATION_UUID &&
+                        value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                ) {
+                    Log.d(
+                        "BluetoothMeshService",
+                        "Client ${device.address} enabled notifications",
+                    )
                 }
             }
 
@@ -448,6 +486,25 @@ class BluetoothMeshService {
                             writeOrQueue(peerId, ent, data)
                         }
                     }
+                }
+            }
+
+            override fun onDescriptorWrite(
+                gatt: BluetoothGatt,
+                descriptor: BluetoothGattDescriptor,
+                status: Int,
+            ) {
+                if (
+                    descriptor.uuid ==
+                        BluetoothGattDescriptor.CLIENT_CHARACTERISTIC_CONFIGURATION_UUID &&
+                        descriptor.value.contentEquals(
+                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE,
+                        )
+                ) {
+                    Log.d(
+                        "BluetoothMeshService",
+                        "Enabled notifications for ${gatt.device.address}",
+                    )
                 }
             }
 
