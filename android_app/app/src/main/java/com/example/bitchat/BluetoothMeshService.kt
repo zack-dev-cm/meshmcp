@@ -415,7 +415,6 @@ class BluetoothMeshService {
                     onPeerConnected(address)
                     Log.d("BluetoothMeshService", "GATT client connected: $address")
                     gatt.discoverServices()
-                    conn.serviceDiscoveryStarted = true
                 }
             }
 
@@ -437,18 +436,16 @@ class BluetoothMeshService {
                     )
 
                     val peerId = gatt.device.address
+                    connections[peerId]?.serviceDiscoveryStarted = true
+
                     outgoingQueues[peerId]?.let { queue ->
+                        val items: List<Pair<MessageEntity, ByteArray>>
                         synchronized(queue) {
-                            if (queue.isNotEmpty()) {
-                                Log.d(
-                                    "BluetoothMeshService",
-                                    "Flushing queued messages for $peerId after services discovered",
-                                )
-                                queue.forEach { (_, data) ->
-                                    characteristic.value = data
-                                    gatt.writeCharacteristic(characteristic)
-                                }
-                            }
+                            items = queue.toList()
+                            queue.clear()
+                        }
+                        items.forEach { (ent, data) ->
+                            writeOrQueue(peerId, ent, data)
                         }
                     }
                 }
