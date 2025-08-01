@@ -62,7 +62,8 @@ class BluetoothMeshService {
     private val _peersFlow = MutableStateFlow<List<String>>(emptyList())
     val peersFlow: StateFlow<List<String>> = _peersFlow
 
-    private val discovered = mutableSetOf<String>()
+    private val discoveryRetentionMillis = 5 * 60 * 1000L
+    private val discovered = mutableMapOf<String, Long>()
     private val _discoveredFlow = MutableStateFlow<List<String>>(emptyList())
     val discoveredPeersFlow: StateFlow<List<String>> = _discoveredFlow
     private val _scanning = MutableStateFlow(false)
@@ -208,8 +209,9 @@ class BluetoothMeshService {
             return
         }
         _missingRequirements.value = emptySet()
-        discovered.clear()
-        _discoveredFlow.value = emptyList()
+        val now = System.currentTimeMillis()
+        discovered.entries.removeIf { (_, time) -> now - time > discoveryRetentionMillis }
+        _discoveredFlow.value = discovered.keys.toList()
         val filter =
             ScanFilter
                 .Builder()
@@ -525,9 +527,17 @@ class BluetoothMeshService {
                 result: ScanResult?,
             ) {
                 val device = result?.device ?: return
-                Log.d("BluetoothMeshService", "Discovered device ${device.address}")
-                if (discovered.add(device.address)) {
-                    _discoveredFlow.value = discovered.toList()
+                val now = System.currentTimeMillis()
+                val lastSeen = discovered[device.address]
+                if (lastSeen == null || now - lastSeen > discoveryRetentionMillis) {
+                    Log.d(
+                        "BluetoothMeshService",
+                        "Discovered device ${device.address}",
+                    )
+                    discovered[device.address] = now
+                    _discoveredFlow.value = discovered.keys.toList()
+                } else {
+                    discovered[device.address] = now
                 }
                 val conn = connections[device.address]
                 if (conn?.gatt == null) {
