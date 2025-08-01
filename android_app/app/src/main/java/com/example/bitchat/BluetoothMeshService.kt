@@ -29,11 +29,24 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 
+enum class PeerConnectionState {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED, // BLE connected but not authenticated
+    AUTHENTICATING,
+    AUTHENTICATED;
+
+    val isAvailable: Boolean
+        get() = this == AUTHENTICATED
+}
+
 data class PeerConnection(
     var gatt: BluetoothGatt? = null,
     var serverConnected: Boolean = false,
     var serviceDiscoveryStarted: Boolean = false,
     var connectionRetryCount: Int = 0,
+    var state: PeerConnectionState = PeerConnectionState.DISCONNECTED,
+    var lastActivity: Long = System.currentTimeMillis(),
 )
 
 enum class ScanRequirement {
@@ -96,6 +109,9 @@ class BluetoothMeshService {
     private val _connectionFailureCounts = ConcurrentHashMap<Int, Int>()
     val connectionFailureCounts: Map<Int, Int> get() = _connectionFailureCounts
 
+    private var cleanupJob: Job? = null
+    private val disconnectedRetentionMillis = 5 * 60 * 1000L
+
     private var writeRetryBaseDelay = 500L
     private var writeRetryMaxDelay = 5_000L
     private var connectionRetryBaseDelay = 1_000L
@@ -129,6 +145,12 @@ class BluetoothMeshService {
         startGattServer()
         startScanning()
         startAdvertising()
+        cleanupJob = scope.launch {
+            while (true) {
+                delay(disconnectedRetentionMillis)
+                purgeDisconnectedPeers()
+            }
+        }
     }
 
     fun stop() {
@@ -146,6 +168,7 @@ class BluetoothMeshService {
         _discoveredFlow.value = emptyList()
         _scanning.value = false
         _advertising.value = false
+        cleanupJob?.cancel()
     }
 
     /**
@@ -157,11 +180,18 @@ class BluetoothMeshService {
         identity.rotate()
     }
 
+    private fun touch(peerId: String) {
+        connections[peerId]?.lastActivity = System.currentTimeMillis()
+    }
+
     fun onPeerConnected(
         peerId: String,
         nickname: String? = null,
     ) {
         Log.d("BluetoothMeshService", "Peer connected: $peerId")
+        val conn = connections.getOrPut(peerId) { PeerConnection() }
+        conn.state = PeerConnectionState.CONNECTED
+        touch(peerId)
         peers.add(peerId)
         _peersFlow.value = peers.toList()
         scope.launch {
@@ -193,13 +223,35 @@ class BluetoothMeshService {
     fun onPeerDisconnected(peerId: String) {
         Log.d("BluetoothMeshService", "Peer disconnected: $peerId")
         val conn = connections[peerId]
+        touch(peerId)
         if (conn != null) {
             if (!conn.serverConnected && conn.gatt == null) {
+                conn.state = PeerConnectionState.DISCONNECTED
                 connections.remove(peerId)
+                peers.remove(peerId)
+                _peersFlow.value = peers.toList()
+            }
+        } else {
+            peers.remove(peerId)
+            _peersFlow.value = peers.toList()
+        }
+    }
+
+    private fun purgeDisconnectedPeers() {
+        val now = System.currentTimeMillis()
+        val iterator = connections.entries.iterator()
+        var changed = false
+        while (iterator.hasNext()) {
+            val (id, conn) = iterator.next()
+            if (conn.state == PeerConnectionState.DISCONNECTED && now - conn.lastActivity > disconnectedRetentionMillis) {
+                iterator.remove()
+                peers.remove(id)
+                changed = true
             }
         }
-        peers.remove(peerId)
-        _peersFlow.value = peers.toList()
+        if (changed) {
+            _peersFlow.value = peers.toList()
+        }
     }
 
     private fun startScanning() {
@@ -284,6 +336,8 @@ class BluetoothMeshService {
                 val conn = connections.getOrPut(address) { PeerConnection() }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     conn.serverConnected = true
+                    conn.state = PeerConnectionState.CONNECTED
+                    touch(address)
                     if (conn.gatt == null) {
                         conn.gatt = device.connectGatt(appContext, false, gattClientCallback)
                     }
@@ -291,10 +345,8 @@ class BluetoothMeshService {
                     Log.d("BluetoothMeshService", "GATT server connected: $address")
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     conn.serverConnected = false
+                    touch(address)
                     onPeerDisconnected(address)
-                    if (conn.gatt == null) {
-                        connections.remove(address)
-                    }
                     Log.d("BluetoothMeshService", "GATT server disconnected: $address")
                 }
             }
@@ -317,6 +369,7 @@ class BluetoothMeshService {
                     val text = msg?.text ?: packet.payload.toString(Charsets.UTF_8)
                     val messageId = msg?.id ?: UUID.randomUUID().toString()
                     val peerId = device.address
+                    touch(peerId)
                     scope.launch {
                         val nick = repository.getPeerNickname(peerId)
                             ?: NicknameGenerator.generate(peerId)
@@ -378,6 +431,7 @@ class BluetoothMeshService {
                 if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
                     conn.gatt = null
                     conn.serviceDiscoveryStarted = false
+                    touch(address)
                     gatt.close()
                     val count = _connectionFailureCounts.merge(status, 1, Int::plus) ?: 1
                     conn.connectionRetryCount += 1
@@ -402,7 +456,6 @@ class BluetoothMeshService {
                         )
                         onPeerDisconnected(address)
                         outgoingQueues.remove(address)
-                        connections.remove(address)
                         conn.connectionRetryCount = 0
                     }
                     return
@@ -412,6 +465,8 @@ class BluetoothMeshService {
                     conn.connectionRetryCount = 0
                     conn.gatt = gatt
                     conn.serviceDiscoveryStarted = false
+                    conn.state = PeerConnectionState.CONNECTED
+                    touch(address)
                     onPeerConnected(address)
                     Log.d("BluetoothMeshService", "GATT client connected: $address")
                     gatt.discoverServices()
@@ -437,6 +492,7 @@ class BluetoothMeshService {
                     )
 
                     val peerId = gatt.device.address
+                    touch(peerId)
                     outgoingQueues[peerId]?.let { queue ->
                         synchronized(queue) {
                             if (queue.isNotEmpty()) {
@@ -462,6 +518,7 @@ class BluetoothMeshService {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     Log.d("BluetoothMeshService", "Write successful to ${gatt.device.address}")
                     val peerId = gatt.device.address
+                    touch(peerId)
                     val queue = outgoingQueues[peerId]
                     queue?.let { q ->
                         synchronized(q) {
@@ -481,6 +538,7 @@ class BluetoothMeshService {
                 } else {
                     val count = _writeFailureCounts.merge(status, 1, Int::plus) ?: 1
                     val peerId = gatt.device.address
+                    touch(peerId)
                     val queue = outgoingQueues[peerId]
                     queue?.let { q ->
                         synchronized(q) {
@@ -516,6 +574,7 @@ class BluetoothMeshService {
             ) {
                 val packet = BitchatPacket.from(characteristic.value)
                 val peerId = gatt.device.address
+                touch(peerId)
                 if (packet == null) {
                     Log.w(
                         "BluetoothMeshService",
