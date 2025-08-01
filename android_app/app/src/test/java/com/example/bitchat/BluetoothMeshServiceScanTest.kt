@@ -2,17 +2,24 @@ package com.example.bitchat
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothGatt
 import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.util.Log
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.bitchat.db.AppDatabase
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
 import io.mockk.verify
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -152,5 +159,39 @@ class BluetoothMeshServiceScanTest {
             ),
         )
         verify(exactly = 0) { scanner.startScan(any(), any(), any()) }
+    }
+
+    @Test
+    fun noDuplicateDiscoveryLogsAcrossScanRestarts() {
+        context.grant(Manifest.permission.ACCESS_FINE_LOCATION)
+        context.grant(Manifest.permission.BLUETOOTH_SCAN)
+        every { locationManager.isLocationEnabled } returns true
+
+        mockkStatic(Log::class)
+        every { Log.d(any(), any()) } returns 0
+
+        val cbField =
+            BluetoothMeshService::class.java.getDeclaredField("scanCallback").apply {
+                isAccessible = true
+            }
+        val callback = cbField.get(service) as ScanCallback
+
+        val device = mockk<BluetoothDevice> {
+            every { address } returns "AA:BB:CC:DD:EE:FF"
+            every { connectGatt(any(), any(), any()) } returns mockk<BluetoothGatt>(relaxed = true)
+        }
+        val result = mockk<ScanResult> { every { this@mockk.device } returns device }
+
+        invokeStartScanning()
+        callback.onScanResult(0, result)
+
+        invokeStartScanning()
+        callback.onScanResult(0, result)
+
+        verify(exactly = 1) {
+            Log.d("BluetoothMeshService", "Discovered device AA:BB:CC:DD:EE:FF")
+        }
+
+        unmockkStatic(Log::class)
     }
 }
