@@ -214,7 +214,10 @@ class BluetoothMeshService {
         nickname: String? = null,
     ) {
         val conn = connections.computeIfAbsent(peerId) { PeerConnection() }
-        conn.state = PeerConnectionState.AUTHENTICATED
+        val firstConnection = conn.state != PeerConnectionState.AUTHENTICATED
+        if (firstConnection) {
+            conn.state = PeerConnectionState.AUTHENTICATED
+        }
         conn.lastActivity = System.currentTimeMillis()
         Log.d("BluetoothMeshService", "Peer connected: $peerId")
         synchronized(peers) {
@@ -227,11 +230,13 @@ class BluetoothMeshService {
             val connection = connections[peerId]
             val queue = outgoingQueues.computeIfAbsent(peerId) { Collections.synchronizedList(mutableListOf()) }
 
-            val queued = repository.undeliveredForPeer(peerId)
-            queued.forEach { msg ->
-                val basic = BasicMessage(msg.id, msg.content, msg.timestamp)
-                val bytes = createPacket(peerId, basic)
-                synchronized(queue) { queue.add(msg to bytes) }
+            if (firstConnection) {
+                val queued = repository.undeliveredForPeer(peerId)
+                queued.forEach { msg ->
+                    val basic = BasicMessage(msg.id, msg.content, msg.timestamp)
+                    val bytes = createPacket(peerId, basic)
+                    synchronized(queue) { queue.add(msg to bytes) }
+                }
             }
 
             // If services aren't yet discovered, the messages stay queued and
