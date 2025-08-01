@@ -111,7 +111,7 @@ class BluetoothMeshService {
         _peersFlow.value = emptyList()
         _discoveredFlow.value = emptyList()
         _scanning.value = true
-        _advertising.value = true
+        _advertising.value = false
         startGattServer()
         startScanning()
         startAdvertising()
@@ -551,6 +551,12 @@ class BluetoothMeshService {
 
     private fun startAdvertising() {
         Log.d("BluetoothMeshService", "startAdvertising() called")
+        if (_advertising.value) {
+            Log.d("BluetoothMeshService", "Already advertising; skipping new start")
+            return
+        }
+        advertiser?.stopAdvertising(advertiseCallback)
+        _advertising.value = false
         val advName = myNickname.take(advertiseNameLength)
         val settings =
             AdvertiseSettings
@@ -577,6 +583,7 @@ class BluetoothMeshService {
         }
     }
 
+
     private val advertiseCallback =
         object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
@@ -598,6 +605,7 @@ class BluetoothMeshService {
                     "BluetoothMeshService",
                     "Advertising failed: $errorCode ($reason)"
                 )
+                advertiser?.stopAdvertising(this)
                 if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE && !advertiseRetryAttempted) {
                     advertiseRetryAttempted = true
                     advertiseNameLength = maxOf(4, advertiseNameLength - 2)
@@ -606,11 +614,11 @@ class BluetoothMeshService {
                         "BluetoothMeshService",
                         "Retrying advertising with shorter name: $shorter"
                     )
-                    advertiser?.stopAdvertising(this)
                     startAdvertising()
                 }
             }
         }
+
 
     private fun macToBytes(mac: String): ByteArray {
         val parts = mac.split(":")
