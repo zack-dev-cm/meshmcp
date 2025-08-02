@@ -240,7 +240,7 @@ class BluetoothMeshService {
             }
 
             // If services aren't yet discovered, the messages stay queued and
-            // will be flushed from `onServicesDiscovered`.
+            // will be flushed from `onDescriptorWrite`.
             if (connection?.serviceDiscoveryStarted == true) {
                 val items: List<Pair<MessageEntity, ByteArray>>
                 synchronized(queue) {
@@ -503,20 +503,6 @@ class BluetoothMeshService {
                         "BluetoothMeshService",
                         "Services discovered on ${gatt.device.address}",
                     )
-
-                    val peerId = gatt.device.address
-                    connections[peerId]?.serviceDiscoveryStarted = true
-
-                    outgoingQueues[peerId]?.let { queue ->
-                        val items: List<Pair<MessageEntity, ByteArray>>
-                        synchronized(queue) {
-                            items = queue.toList()
-                            queue.clear()
-                        }
-                        items.forEach { (ent, data) ->
-                            writeOrQueue(peerId, ent, data)
-                        }
-                    }
                 }
             }
 
@@ -532,6 +518,16 @@ class BluetoothMeshService {
                             BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE,
                         )
                 ) {
+                    val peerId = gatt.device.address
+                    connections[peerId]?.serviceDiscoveryStarted = true
+                    outgoingQueues[peerId]?.let { queue ->
+                        val items: List<Pair<MessageEntity, ByteArray>>
+                        synchronized(queue) {
+                            items = queue.toList()
+                            queue.clear()
+                        }
+                        items.forEach { (ent, data) -> writeOrQueue(peerId, ent, data) }
+                    }
                     Log.d(
                         "BluetoothMeshService",
                         "Enabled notifications for ${gatt.device.address}",
@@ -824,7 +820,7 @@ class BluetoothMeshService {
     /**
      * Attempts to write a message to a connected peer. If the peer's services
      * haven't been discovered or the characteristic is unavailable, the message
-     * is queued and will be sent when `onServicesDiscovered` flushes pending
+     * is queued and will be sent when `onDescriptorWrite` flushes pending
      * writes.
      */
     private fun writeOrQueue(
