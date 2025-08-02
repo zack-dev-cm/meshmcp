@@ -3,6 +3,7 @@ package com.example.bitchat
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattCallback
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -11,6 +12,7 @@ import com.example.bitchat.db.MessageEntity
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.any
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import org.junit.After
@@ -150,12 +152,54 @@ class BluetoothMeshServiceRetryTest {
         callback.onConnectionStateChange(gatt, 133, android.bluetooth.BluetoothProfile.STATE_DISCONNECTED)
         delay(30)
         assertEquals(1, service.connectionFailureCounts[133])
+        assertEquals(1, service.status133ConnectionFailures)
         assertTrue(queues[peerId]?.isNotEmpty() == true)
 
         callback.onConnectionStateChange(gatt, 133, android.bluetooth.BluetoothProfile.STATE_DISCONNECTED)
         delay(30)
         assertEquals(2, service.connectionFailureCounts[133])
+        assertEquals(2, service.status133ConnectionFailures)
         assertNull(queues[peerId])
+    }
+
+    @Test
+    fun connectionStatus133RetriesExponentialBackoff() = runBlocking {
+        val baseField = BluetoothMeshService::class.java.getDeclaredField("connectionRetryBaseDelay").apply { isAccessible = true }
+        baseField.setLong(service, 10L)
+        val maxField = BluetoothMeshService::class.java.getDeclaredField("connectionRetryMaxDelay").apply { isAccessible = true }
+        maxField.setLong(service, 40L)
+
+        val peerId = "AA:BB:CC:11:22:33"
+        val gatt = mockk<BluetoothGatt>(relaxed = true)
+        val device = mockk<BluetoothDevice>(relaxed = true)
+        every { device.address } returns peerId
+        every { gatt.device } returns device
+        val callTimes = mutableListOf<Long>()
+        every { device.connectGatt(any<Context>(), any(), any<BluetoothGattCallback>()) } answers {
+            callTimes += System.currentTimeMillis()
+            gatt
+        }
+
+        val cbField = BluetoothMeshService::class.java.getDeclaredField("gattClientCallback").apply { isAccessible = true }
+        val callback = cbField.get(service) as android.bluetooth.BluetoothGattCallback
+
+        val start1 = System.currentTimeMillis()
+        callback.onConnectionStateChange(gatt, 133, android.bluetooth.BluetoothProfile.STATE_DISCONNECTED)
+        delay(20)
+        assertEquals(1, callTimes.size)
+        val firstDelay = callTimes[0] - start1
+        assertTrue(firstDelay >= 10)
+
+        val start2 = System.currentTimeMillis()
+        callback.onConnectionStateChange(gatt, 133, android.bluetooth.BluetoothProfile.STATE_DISCONNECTED)
+        delay(40)
+        assertEquals(2, callTimes.size)
+        val secondDelay = callTimes[1] - start2
+        assertTrue(secondDelay >= 20)
+        assertTrue(secondDelay >= firstDelay * 2)
+
+        verify(exactly = 2) { gatt.disconnect() }
+        verify(exactly = 2) { gatt.close() }
     }
 }
 

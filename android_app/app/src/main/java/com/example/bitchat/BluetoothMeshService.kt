@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 import java.util.*
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
 enum class PeerConnectionState {
@@ -107,6 +108,9 @@ class BluetoothMeshService {
     val writeFailureCounts: Map<Int, Int> get() = _writeFailureCounts
     private val _connectionFailureCounts = ConcurrentHashMap<Int, Int>()
     val connectionFailureCounts: Map<Int, Int> get() = _connectionFailureCounts
+    private val _status133ConnectionFailures = AtomicInteger(0)
+    val status133ConnectionFailures: Int
+        get() = _status133ConnectionFailures.get()
 
     private var connectionCleanupJob: Job? = null
     private val disconnectRetentionMillis = 5 * 60 * 1000L
@@ -476,6 +480,55 @@ class BluetoothMeshService {
             ) {
                 val address = gatt.device.address
                 val conn = connections.computeIfAbsent(address) { PeerConnection() }
+                if (status == 133) {
+                    _status133ConnectionFailures.incrementAndGet()
+                    val count = _connectionFailureCounts.merge(133, 1, Int::plus) ?: 1
+                    conn.gatt = null
+                    conn.serverConnected = false
+                    conn.serviceDiscoveryStarted = false
+                    conn.state = PeerConnectionState.DISCONNECTED
+                    conn.lastActivity = System.currentTimeMillis()
+                    updatePeerState(conn)
+                    try {
+                        gatt.disconnect()
+                        val refresh = gatt.javaClass.getMethod("refresh")
+                        refresh.invoke(gatt)
+                    } catch (e: Exception) {
+                        Log.w(
+                            "BluetoothMeshService",
+                            "Error refreshing device cache for $address",
+                            e,
+                        )
+                    } finally {
+                        gatt.close()
+                    }
+                    conn.connectionRetryCount += 1
+                    if (conn.connectionRetryCount < maxConnectionRetries) {
+                        val delayMs =
+                            min(
+                                connectionRetryBaseDelay * (1L shl (conn.connectionRetryCount - 1)),
+                                connectionRetryMaxDelay,
+                            )
+                        Log.w(
+                            "BluetoothMeshService",
+                            "Status 133 on $address (attempt ${conn.connectionRetryCount}, delay ${delayMs}ms, count=$count)",
+                        )
+                        val callback = this
+                        scope.launch {
+                            delay(delayMs)
+                            gatt.device.connectGatt(appContext, false, callback)
+                        }
+                    } else {
+                        Log.e(
+                            "BluetoothMeshService",
+                            "Status 133 on $address after ${conn.connectionRetryCount} attempts",
+                        )
+                        onPeerDisconnected(address)
+                        outgoingQueues.remove(address)
+                        conn.connectionRetryCount = 0
+                    }
+                    return
+                }
                 if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
                     conn.gatt = null
                     conn.serviceDiscoveryStarted = false
