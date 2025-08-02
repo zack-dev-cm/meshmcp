@@ -209,6 +209,16 @@ class BluetoothMeshService {
         identity.rotate()
     }
 
+    private fun updatePeerState(conn: PeerConnection) {
+        if (conn.serverConnected || conn.gatt != null) {
+            if (conn.state == PeerConnectionState.DISCONNECTED) {
+                conn.state = PeerConnectionState.CONNECTED
+            }
+        } else {
+            conn.state = PeerConnectionState.DISCONNECTED
+        }
+    }
+
     fun onPeerConnected(
         peerId: String,
         nickname: String? = null,
@@ -357,20 +367,19 @@ class BluetoothMeshService {
                 val address = device.address
                 val conn = connections.computeIfAbsent(address) { PeerConnection() }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    val wasServerConnected = conn.serverConnected
                     conn.serverConnected = true
-                    conn.state = PeerConnectionState.CONNECTED
                     conn.lastActivity = System.currentTimeMillis()
-                    if (conn.gatt == null) {
+                    if (!wasServerConnected && conn.gatt == null) {
                         conn.gatt = device.connectGatt(appContext, false, gattClientCallback)
                     }
+                    updatePeerState(conn)
                     onPeerConnected(address)
                     Log.d("BluetoothMeshService", "GATT server connected: $address")
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     conn.serverConnected = false
                     conn.lastActivity = System.currentTimeMillis()
-                    if (conn.gatt == null) {
-                        conn.state = PeerConnectionState.DISCONNECTED
-                    }
+                    updatePeerState(conn)
                     onPeerDisconnected(address)
                     Log.d("BluetoothMeshService", "GATT server disconnected: $address")
                 }
@@ -442,34 +451,36 @@ class BluetoothMeshService {
                     conn.gatt = null
                     conn.serviceDiscoveryStarted = false
                     conn.lastActivity = System.currentTimeMillis()
-                    if (!conn.serverConnected) {
-                        conn.state = PeerConnectionState.DISCONNECTED
-                    }
+                    updatePeerState(conn)
                     gatt.close()
-                    val count = _connectionFailureCounts.merge(status, 1, Int::plus) ?: 1
-                    conn.connectionRetryCount += 1
-                    if (conn.connectionRetryCount < maxConnectionRetries) {
-                        val delayMs =
-                            min(
-                                connectionRetryBaseDelay * (1L shl (conn.connectionRetryCount - 1)),
-                                connectionRetryMaxDelay,
+                    if (!conn.serverConnected) {
+                        val count = _connectionFailureCounts.merge(status, 1, Int::plus) ?: 1
+                        conn.connectionRetryCount += 1
+                        if (conn.connectionRetryCount < maxConnectionRetries) {
+                            val delayMs =
+                                min(
+                                    connectionRetryBaseDelay * (1L shl (conn.connectionRetryCount - 1)),
+                                    connectionRetryMaxDelay,
+                                )
+                            Log.w(
+                                "BluetoothMeshService",
+                                "Connection to $address failed with status $status (attempt ${conn.connectionRetryCount}, delay ${delayMs}ms, count=$count)",
                             )
-                        Log.w(
-                            "BluetoothMeshService",
-                            "Connection to $address failed with status $status (attempt ${conn.connectionRetryCount}, delay ${delayMs}ms, count=$count)",
-                        )
-                        val callback = this
-                        scope.launch {
-                            delay(delayMs)
-                            gatt.device.connectGatt(appContext, false, callback)
+                            val callback = this
+                            scope.launch {
+                                delay(delayMs)
+                                gatt.device.connectGatt(appContext, false, callback)
+                            }
+                        } else {
+                            Log.e(
+                                "BluetoothMeshService",
+                                "Connection to $address failed after ${conn.connectionRetryCount} attempts with status $status",
+                            )
+                            onPeerDisconnected(address)
+                            outgoingQueues.remove(address)
+                            conn.connectionRetryCount = 0
                         }
                     } else {
-                        Log.e(
-                            "BluetoothMeshService",
-                            "Connection to $address failed after ${conn.connectionRetryCount} attempts with status $status",
-                        )
-                        onPeerDisconnected(address)
-                        outgoingQueues.remove(address)
                         conn.connectionRetryCount = 0
                     }
                     return
