@@ -607,8 +607,35 @@ class BluetoothMeshService {
                 ackBytes?.let { bytes ->
                     val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
                     char?.let { c ->
-                        c.value = bytes
-                        gatt.writeCharacteristic(c)
+                        var backoff = 100L
+                        val maxAttempts = 4
+                        for (attempt in 1..maxAttempts) {
+                            c.value = bytes
+                            if (gatt.writeCharacteristic(c)) {
+                                Log.d(
+                                    "BluetoothMeshService",
+                                    "ACK write to $peerId succeeded on attempt $attempt",
+                                )
+                                break
+                            } else {
+                                Log.w(
+                                    "BluetoothMeshService",
+                                    "ACK write to $peerId failed on attempt $attempt",
+                                )
+                                if (attempt == maxAttempts) {
+                                    Log.e(
+                                        "BluetoothMeshService",
+                                        "Failed to write ACK to $peerId after $maxAttempts attempts",
+                                    )
+                                } else {
+                                    try {
+                                        Thread.sleep(backoff)
+                                    } catch (_: InterruptedException) {
+                                    }
+                                    backoff *= 2
+                                }
+                            }
+                        }
                     }
                 }
             }
