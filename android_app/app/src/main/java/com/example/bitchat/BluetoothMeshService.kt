@@ -397,8 +397,37 @@ class BluetoothMeshService {
                 if (
                     descriptor.uuid ==
                     characteristicUuid &&
-                        value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                    value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                 ) {
+                    val address = device.address
+                    connections[address]?.serviceDiscoveryStarted = true
+                    outgoingQueues[address]?.let { queue ->
+                        val serverCharacteristic =
+                            gattServer
+                                ?.getService(serviceUuid)
+                                ?.getCharacteristic(characteristicUuid)
+                        if (serverCharacteristic != null) {
+                            val items: List<Pair<MessageEntity, ByteArray>>
+                            synchronized(queue) {
+                                items = queue.toList()
+                                queue.clear()
+                            }
+                            items.forEach { (entity, bytes) ->
+                                serverCharacteristic.value = bytes
+                                val notified =
+                                    gattServer?.notifyCharacteristicChanged(
+                                        device,
+                                        serverCharacteristic,
+                                        false,
+                                    ) == true
+                                if (notified) {
+                                    scope.launch { repository.markDelivered(entity) }
+                                } else {
+                                    synchronized(queue) { queue.add(entity to bytes) }
+                                }
+                            }
+                        }
+                    }
                     Log.d(
                         "BluetoothMeshService",
                         "Client ${device.address} enabled notifications",
@@ -514,9 +543,9 @@ class BluetoothMeshService {
                 if (
                     descriptor.uuid ==
                     characteristicUuid &&
-                        descriptor.value.contentEquals(
-                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE,
-                        )
+                    descriptor.value.contentEquals(
+                        BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE,
+                    )
                 ) {
                     val peerId = gatt.device.address
                     connections[peerId]?.serviceDiscoveryStarted = true
@@ -610,7 +639,10 @@ class BluetoothMeshService {
             }
         }
 
-    private fun handleIncomingData(peerId: String, value: ByteArray): ByteArray? {
+    private fun handleIncomingData(
+        peerId: String,
+        value: ByteArray,
+    ): ByteArray? {
         val packet = BitchatPacket.from(value)
         if (packet == null) {
             Log.w(
