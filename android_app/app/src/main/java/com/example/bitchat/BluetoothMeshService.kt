@@ -397,12 +397,46 @@ class BluetoothMeshService {
                 if (
                     descriptor.uuid ==
                     characteristicUuid &&
-                        value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                    value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                 ) {
                     Log.d(
                         "BluetoothMeshService",
                         "Client ${device.address} enabled notifications",
                     )
+
+                    val connection = connections.computeIfAbsent(device.address) { PeerConnection() }
+                    connection.serviceDiscoveryStarted = true
+
+                    val characteristic =
+                        gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+
+                    if (characteristic != null) {
+                        outgoingQueues[device.address]?.let { queue ->
+                            val items: List<Pair<MessageEntity, ByteArray>>
+                            synchronized(queue) {
+                                items = queue.toList()
+                                queue.clear()
+                            }
+                            items.forEach { (entity, payload) ->
+                                characteristic.value = payload
+                                val success =
+                                    gattServer?.notifyCharacteristicChanged(
+                                        device,
+                                        characteristic,
+                                        false,
+                                    ) ?: false
+                                if (success) {
+                                    scope.launch { repository.markDelivered(entity) }
+                                } else {
+                                    Log.w(
+                                        "BluetoothMeshService",
+                                        "notifyCharacteristicChanged failed for ${device.address}",
+                                    )
+                                    synchronized(queue) { queue.add(entity to payload) }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -528,9 +562,9 @@ class BluetoothMeshService {
                 if (
                     descriptor.uuid ==
                     characteristicUuid &&
-                        descriptor.value.contentEquals(
-                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE,
-                        )
+                    descriptor.value.contentEquals(
+                        BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE,
+                    )
                 ) {
                     Log.d(
                         "BluetoothMeshService",
@@ -614,7 +648,10 @@ class BluetoothMeshService {
             }
         }
 
-    private fun handleIncomingData(peerId: String, value: ByteArray): ByteArray? {
+    private fun handleIncomingData(
+        peerId: String,
+        value: ByteArray,
+    ): ByteArray? {
         val packet = BitchatPacket.from(value)
         if (packet == null) {
             Log.w(
