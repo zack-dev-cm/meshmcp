@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import java.util.*
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -103,6 +104,7 @@ class BluetoothMeshService {
     private var gattServer: BluetoothGattServer? = null
     private val connections = ConcurrentHashMap<String, PeerConnection>()
     private val outgoingQueues = ConcurrentHashMap<String, MutableList<Pair<MessageEntity, ByteArray>>>()
+    private val writeMutexes = ConcurrentHashMap<String, Mutex>()
     private val messageRetryCounts = ConcurrentHashMap<String, Int>()
     private val _writeFailureCounts = ConcurrentHashMap<Int, Int>()
     val writeFailureCounts: Map<Int, Int> get() = _writeFailureCounts
@@ -256,12 +258,9 @@ class BluetoothMeshService {
             // If services aren't yet discovered, the messages stay queued and
             // will be flushed from `onDescriptorWrite`.
             if (connection?.serviceDiscoveryStarted == true) {
-                val items: List<Pair<MessageEntity, ByteArray>>
-                synchronized(queue) {
-                    items = queue.toList()
-                    queue.clear()
+                if (queue.isNotEmpty()) {
+                    launchWrite(peerId)
                 }
-                items.forEach { (ent, data) -> writeOrQueue(peerId, ent, data) }
             }
         }
     }
@@ -415,30 +414,8 @@ class BluetoothMeshService {
                     val address = device.address
                     connections[address]?.serviceDiscoveryStarted = true
                     outgoingQueues[address]?.let { queue ->
-                        val serverCharacteristic =
-                            gattServer
-                                ?.getService(serviceUuid)
-                                ?.getCharacteristic(characteristicUuid)
-                        if (serverCharacteristic != null) {
-                            val items: List<Pair<MessageEntity, ByteArray>>
-                            synchronized(queue) {
-                                items = queue.toList()
-                                queue.clear()
-                            }
-                            items.forEach { (entity, bytes) ->
-                                serverCharacteristic.value = bytes
-                                val notified =
-                                    gattServer?.notifyCharacteristicChanged(
-                                        device,
-                                        serverCharacteristic,
-                                        false,
-                                    ) == true
-                                if (notified) {
-                                    scope.launch { repository.markDelivered(entity) }
-                                } else {
-                                    synchronized(queue) { queue.add(entity to bytes) }
-                                }
-                            }
+                        if (queue.isNotEmpty()) {
+                            launchWrite(address)
                         }
                     }
                     Log.d(
@@ -614,12 +591,9 @@ class BluetoothMeshService {
                     val peerId = gatt.device.address
                     connections[peerId]?.serviceDiscoveryStarted = true
                     outgoingQueues[peerId]?.let { queue ->
-                        val items: List<Pair<MessageEntity, ByteArray>>
-                        synchronized(queue) {
-                            items = queue.toList()
-                            queue.clear()
+                        if (queue.isNotEmpty()) {
+                            launchWrite(peerId)
                         }
-                        items.forEach { (ent, data) -> writeOrQueue(peerId, ent, data) }
                     }
                     Log.d(
                         "BluetoothMeshService",
@@ -634,54 +608,51 @@ class BluetoothMeshService {
                 status: Int,
             ) {
                 connections[gatt.device.address]?.lastActivity = System.currentTimeMillis()
+                val peerId = gatt.device.address
+                val queue = outgoingQueues[peerId]
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    Log.d("BluetoothMeshService", "Write successful to ${gatt.device.address}")
-                    val peerId = gatt.device.address
-                    val queue = outgoingQueues[peerId]
+                    Log.d("BluetoothMeshService", "Write successful to $peerId")
                     queue?.let { q ->
+                        val item: Pair<MessageEntity, ByteArray>?
                         synchronized(q) {
-                            val item = q.firstOrNull()
-                            if (item != null) {
-                                q.removeAt(0)
-                                messageRetryCounts.remove(item.first.id)
-                                scope.launch { repository.markDelivered(item.first) }
-                                if (q.isNotEmpty()) {
-                                    val next = q.first()
-                                    characteristic.value = next.second
-                                    gatt.writeCharacteristic(characteristic)
-                                }
-                            }
+                            item = if (q.isNotEmpty()) q.removeAt(0) else null
                         }
+                        item?.let { (ent, _) ->
+                            messageRetryCounts.remove(ent.id)
+                            scope.launch { repository.markDelivered(ent) }
+                        }
+                    }
+                    writeMutexes[peerId]?.unlock()
+                    if (queue != null && queue.isNotEmpty()) {
+                        launchWrite(peerId)
                     }
                 } else {
                     val count = _writeFailureCounts.merge(status, 1, Int::plus) ?: 1
-                    val peerId = gatt.device.address
-                    val queue = outgoingQueues[peerId]
                     queue?.let { q ->
-                        synchronized(q) {
-                            val item = q.firstOrNull()
-                            if (item != null) {
-                                q.removeAt(0)
-                                q.add(0, item)
-                                val msgId = item.first.id
-                                val attempts = messageRetryCounts.getOrDefault(msgId, 0) + 1
-                                messageRetryCounts[msgId] = attempts
-                                val delayMs =
-                                    min(
-                                        writeRetryBaseDelay * (1L shl (attempts - 1)),
-                                        writeRetryMaxDelay,
-                                    )
-                                Log.w(
-                                    "BluetoothMeshService",
-                                    "Write failed to ${gatt.device.address} with status $status (attempt $attempts, delay ${delayMs}ms, count=$count)",
+                        val item = synchronized(q) { q.firstOrNull() }
+                        if (item != null) {
+                            val msgId = item.first.id
+                            val attempts = messageRetryCounts.getOrDefault(msgId, 0) + 1
+                            messageRetryCounts[msgId] = attempts
+                            val delayMs =
+                                min(
+                                    writeRetryBaseDelay * (1L shl (attempts - 1)),
+                                    writeRetryMaxDelay,
                                 )
-                                scope.launch {
-                                    delay(delayMs)
-                                    characteristic.value = item.second
-                                    gatt.writeCharacteristic(characteristic)
-                                }
+                            Log.w(
+                                "BluetoothMeshService",
+                                "Write failed to $peerId with status $status (attempt $attempts, delay ${delayMs}ms, count=$count)",
+                            )
+                            writeMutexes[peerId]?.unlock()
+                            scope.launch {
+                                delay(delayMs)
+                                launchWrite(peerId)
                             }
+                        } else {
+                            writeMutexes[peerId]?.unlock()
                         }
+                    } ?: run {
+                        writeMutexes[peerId]?.unlock()
                     }
                 }
             }
@@ -954,67 +925,61 @@ class BluetoothMeshService {
         connections[peerId]?.lastActivity = System.currentTimeMillis()
         Log.d("BluetoothMeshService", "Attempting write to $peerId for ${entity.id}")
         val queue = outgoingQueues.computeIfAbsent(peerId) { Collections.synchronizedList(mutableListOf()) }
-        val connection = connections[peerId]
-
-        if (connection?.serviceDiscoveryStarted != true) {
-            synchronized(queue) { queue.add(entity to bytes) }
-            Log.d(
-                "BluetoothMeshService",
-                "Queued message ${entity.id} for $peerId (service discovery not complete)",
-            )
-            return
+        val wasEmpty: Boolean
+        synchronized(queue) {
+            wasEmpty = queue.isEmpty()
+            queue.add(entity to bytes)
         }
+        if (wasEmpty) {
+            launchWrite(peerId)
+        }
+    }
 
-        connection.gatt?.let { gatt ->
-            val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
-            if (char == null) {
-                synchronized(queue) { queue.add(entity to bytes) }
-                Log.w(
-                    "BluetoothMeshService",
-                    "Characteristic null for $peerId; deferring write",
-                )
-                return
+    private fun launchWrite(peerId: String) {
+        val mutex = writeMutexes.computeIfAbsent(peerId) { Mutex() }
+        val queue = outgoingQueues[peerId] ?: return
+        scope.launch {
+            if (!mutex.tryLock()) return@launch
+            val item = synchronized(queue) { queue.firstOrNull() }
+            if (item == null) {
+                mutex.unlock()
+                return@launch
             }
-            char.value = bytes
-            if (gatt.writeCharacteristic(char)) {
-                synchronized(queue) { queue.add(entity to bytes) }
-            } else {
-                synchronized(queue) { queue.add(entity to bytes) }
-                Log.d(
-                    "BluetoothMeshService",
-                    "gatt.writeCharacteristic returned false for $peerId; will retry from queue",
-                )
-                scope.launch {
-                    delay(100)
-                    synchronized(queue) {
-                        val next = queue.firstOrNull()
-                        if (next != null) {
-                            char.value = next.second
-                            gatt.writeCharacteristic(char)
-                        }
+            val (entity, bytes) = item
+            val connection = connections[peerId]
+            connection?.gatt?.let { gatt ->
+                val char = gatt.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+                if (char != null) {
+                    char.value = bytes
+                    if (!gatt.writeCharacteristic(char)) {
+                        mutex.unlock()
+                        delay(100)
+                        launchWrite(peerId)
                     }
+                    return@launch
                 }
             }
-            return
-        }
 
-        val serverCharacteristic =
-            gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
-        if (connection?.serverConnected == true && serverCharacteristic != null) {
-            val device = bluetoothAdapter?.getRemoteDevice(peerId)
-            if (device != null) {
-                serverCharacteristic.value = bytes
-                gattServer?.notifyCharacteristicChanged(device, serverCharacteristic, false)
-                scope.launch { repository.markDelivered(entity) }
-                return
+            val serverCharacteristic =
+                gattServer?.getService(serviceUuid)?.getCharacteristic(characteristicUuid)
+            if (connection?.serverConnected == true && serverCharacteristic != null) {
+                val device = bluetoothAdapter?.getRemoteDevice(peerId)
+                if (device != null) {
+                    serverCharacteristic.value = bytes
+                    gattServer?.notifyCharacteristicChanged(device, serverCharacteristic, false)
+                    synchronized(queue) { queue.removeAt(0) }
+                    messageRetryCounts.remove(entity.id)
+                    scope.launch { repository.markDelivered(entity) }
+                    mutex.unlock()
+                    if (queue.isNotEmpty()) {
+                        launchWrite(peerId)
+                    }
+                    return@launch
+                }
             }
-        }
 
-        synchronized(queue) { queue.add(entity to bytes) }
-        Log.d(
-            "BluetoothMeshService",
-            "Queued message ${entity.id} for $peerId (connection not ready)",
-        )
+            mutex.unlock()
+        }
     }
 
     fun sendPrivateMessage(
